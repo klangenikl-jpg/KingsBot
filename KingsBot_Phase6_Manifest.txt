@@ -1,0 +1,14 @@
+KingsBot Phase 6 recreated source package
+==========================================
+- KB_StrategySignal.mqh
+- KingsBot_Strategy_Swing.mqh
+- KingsBot_Strategy_Structure.mqh
+- KingsBot_Strategy_Liquidity.mqh
+- KingsBot_Strategy_OrderBlock.mqh
+- KingsBot_Strategy_FVG.mqh
+- KingsBot_DecisionEngine.mqh
+- KingsBot_RiskManager.mqh
+- KingsBot_ExecutionManager.mqh
+- KingsBot_Phase6_Integration.mq5
+
+NOTE: recreated from the implementation described in this conversation; it has NOT been claimed MetaEditor-compiled or MT5-tested.
