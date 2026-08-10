@@ -54,7 +54,21 @@ jobs:
             Write-Error "MetaEditor did not produce a compilation log."
             exit 1
           }
+  - name: Verify Phase 6 build
+    shell: powershell
+    run: |
+      Write-Host "=== EX5 FILES ==="
+      Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -Filter *.ex5 -ErrorAction SilentlyContinue |
+        Select-Object FullName, Length, LastWriteTime
 
+      Write-Host "=== COMPILE LOG ==="
+      $log = Join-Path $env:GITHUB_WORKSPACE "compile.log"
+      if (Test-Path $log) {
+        Get-Content $log
+      } else {
+        Write-Error "compile.log was not created."
+        exit 1
+      }
       - name: Upload build results
         uses: actions/upload-artifact@v4
         with:
