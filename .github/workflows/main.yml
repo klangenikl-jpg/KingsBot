@@ -130,12 +130,10 @@ jobs:
         run: |
           $editor = "${{ steps.metaeditor.outputs.path }}"
           $source = "${{ steps.source.outputs.path }}"
-          $log = Join-Path $env:GITHUB_WORKSPACE "compile.log"
 
           Write-Host "=== COMPILING KINGSBOT ==="
           Write-Host "MetaEditor: $editor"
           Write-Host "Source: $source"
-          Write-Host "Log: $log"
 
           if (-not (Test-Path $editor)) {
             Write-Error "MetaEditor executable does not exist."
@@ -147,21 +145,46 @@ jobs:
             exit 1
           }
 
-          Write-Host "Starting MetaEditor compilation..."
+          $sourceDirectory = Split-Path $source -Parent
+          $sourceName = Split-Path $source -Leaf
+          $sourceBase = [System.IO.Path]::GetFileNameWithoutExtension($source)
 
-          & $editor "/compile:$source" "/log:$log"
+          $log = Join-Path $sourceDirectory "$sourceBase.log"
+
+          Write-Host "Source directory: $sourceDirectory"
+          Write-Host "Expected log: $log"
+
+          Write-Host ""
+          Write-Host "Starting MetaEditor..."
+
+          & $editor "/compile:$source" "/log"
+
+          $exitCode = $LASTEXITCODE
+
+          Write-Host ""
+          Write-Host "MetaEditor exit code: $exitCode"
 
           if (Test-Path $log) {
-            Write-Host "=== COMPILE LOG ==="
+            Write-Host ""
+            Write-Host "=== METAEDITOR COMPILE LOG ==="
             Get-Content $log
           }
           else {
-            Write-Error "MetaEditor did not create compile.log."
-            exit 1
+            Write-Host ""
+            Write-Host "WARNING: Expected compile log was not found."
+            Write-Host "Searching for log files..."
+
+            Get-ChildItem `
+              -Path $env:GITHUB_WORKSPACE `
+              -Filter "*.log" `
+              -Recurse `
+              -File `
+              -ErrorAction SilentlyContinue |
+              Select-Object FullName
           }
 
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "MetaEditor returned exit code $LASTEXITCODE."
+          if ($exitCode -ne 0) {
+            Write-Error "MetaEditor returned exit code $exitCode."
             exit 1
           }
 
@@ -180,7 +203,8 @@ jobs:
           if (-not $files) {
             Write-Error "No .ex5 file was created."
 
-            Write-Host "=== WORKSPACE CONTENTS ==="
+            Write-Host ""
+            Write-Host "=== ALL FILES IN WORKSPACE ==="
 
             Get-ChildItem `
               -Path $env:GITHUB_WORKSPACE `
@@ -197,19 +221,6 @@ jobs:
           $files |
             Select-Object FullName, Length, LastWriteTime
 
-          Write-Host ""
-          Write-Host "=== COMPILE LOG ==="
-
-          $log = Join-Path $env:GITHUB_WORKSPACE "compile.log"
-
-          if (Test-Path $log) {
-            Get-Content $log
-          }
-          else {
-            Write-Error "compile.log was not created."
-            exit 1
-          }
-
       - name: Prepare build artifacts
         shell: powershell
         run: |
@@ -221,16 +232,7 @@ jobs:
             -Force |
             Out-Null
 
-          Write-Host "=== COPYING BUILD RESULTS ==="
-
-          $log = Join-Path $env:GITHUB_WORKSPACE "compile.log"
-
-          if (Test-Path $log) {
-            Copy-Item `
-              -Path $log `
-              -Destination $artifactDir `
-              -Force
-          }
+          Write-Host "=== PREPARING ARTIFACTS ==="
 
           $files = Get-ChildItem `
             -Path $env:GITHUB_WORKSPACE `
@@ -239,19 +241,43 @@ jobs:
             -File `
             -ErrorAction SilentlyContinue
 
+          if (-not $files) {
+            Write-Error "No EX5 files available for artifact upload."
+            exit 1
+          }
+
           foreach ($file in $files) {
+            Write-Host "Copying: $($file.FullName)"
+
             Copy-Item `
               -Path $file.FullName `
               -Destination $artifactDir `
               -Force
           }
 
+          $logs = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter "*.log" `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue
+
+          foreach ($log in $logs) {
+            Write-Host "Copying log: $($log.FullName)"
+
+            Copy-Item `
+              -Path $log.FullName `
+              -Destination $artifactDir `
+              -Force
+          }
+
+          Write-Host ""
           Write-Host "=== ARTIFACT DIRECTORY ==="
 
           Get-ChildItem `
             -Path $artifactDir `
             -File |
-            Select-Object FullName, Length
+            Select-Object Name, Length, LastWriteTime
 
       - name: Upload build results
         uses: actions/upload-artifact@v4
