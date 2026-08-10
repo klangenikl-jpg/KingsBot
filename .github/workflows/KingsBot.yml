@@ -58,3 +58,9 @@ jobs:
             compile.log
             **/*.ex5
           if-no-files-found: warn
+                - name: Install MetaTrader 5
+        shell: powershell
+        run: |
+          $installer = "$env:RUNNER_TEMP\mt5setup.exe"
+          Invoke-WebRequest -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile $installer
+          Start-Process $installer -ArgumentList "/auto","/path:$env:RUNNER_TEMP\MetaTrader5" -Wait
