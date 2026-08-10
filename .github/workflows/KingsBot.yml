@@ -12,6 +12,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Find MetaEditor
+        id: metaeditor
         shell: powershell
         run: |
           $paths = @(
@@ -19,11 +20,41 @@ jobs:
             "${env:ProgramFiles(x86)}\MetaTrader 5\metaeditor64.exe"
           )
 
-          $found = $paths | Where-Object { Test-Path $_ }
+          $found = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
 
           if (-not $found) {
-            Write-Host "MetaEditor is not installed on this runner."
+            Write-Error "MetaEditor not found."
             exit 1
           }
 
-          Write-Host "MetaEditor found at: $found"
+          "path=$found" >> $env:GITHUB_OUTPUT
+
+      - name: Compile Phase 6
+        shell: powershell
+        run: |
+          $editor = "${{ steps.metaeditor.outputs.path }}"
+          $source = Join-Path $env:GITHUB_WORKSPACE "KingsBot_Phase6_Integration.mq5"
+          $log = Join-Path $env:GITHUB_WORKSPACE "compile.log"
+
+          if (-not (Test-Path $source)) {
+            Write-Error "Source file not found: $source"
+            exit 1
+          }
+
+          & $editor /compile:"$source" /log:"$log"
+
+          if (Test-Path $log) {
+            Get-Content $log
+          } else {
+            Write-Error "MetaEditor did not produce a compilation log."
+            exit 1
+          }
+
+      - name: Upload build results
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingsBot-Phase6-Build
+          path: |
+            compile.log
+            **/*.ex5
+          if-no-files-found: warn
