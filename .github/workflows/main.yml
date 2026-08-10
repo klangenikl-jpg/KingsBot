@@ -88,7 +88,11 @@ jobs:
           Write-Host "MetaEditor found at:"
           Write-Host $found.FullName
 
-          "path=$($found.FullName)" >> $env:GITHUB_OUTPUT
+          "path=$($found.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Append `
+              -Encoding utf8
 
       - name: Find KingsBot source
         id: source
@@ -98,32 +102,24 @@ jobs:
 
           $source = Get-ChildItem `
             -Path $env:GITHUB_WORKSPACE `
-            -Filter "KingsBot_Phase6_Integration.mq5" `
+            -Filter "KingsBot*.mq5" `
             -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue |
+            -File |
             Select-Object -First 1
 
           if (-not $source) {
-            Write-Error "KingsBot_Phase6_Integration.mq5 was not found."
-
-            Write-Host "=== AVAILABLE MQ5 FILES ==="
-
-            Get-ChildItem `
-              -Path $env:GITHUB_WORKSPACE `
-              -Filter "*.mq5" `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Select-Object FullName
-
+            Write-Error "No KingsBot .mq5 source file was found."
             exit 1
           }
 
           Write-Host "KingsBot source found at:"
           Write-Host $source.FullName
 
-          "path=$($source.FullName)" >> $env:GITHUB_OUTPUT
+          "path=$($source.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_OUTPUT `
+              -Append `
+              -Encoding utf8
 
       - name: Compile KingsBot
         shell: powershell
@@ -131,9 +127,23 @@ jobs:
           $editor = "${{ steps.metaeditor.outputs.path }}"
           $source = "${{ steps.source.outputs.path }}"
 
+          $sourceDir = Split-Path $source -Parent
+          $sourceName = [System.IO.Path]::GetFileNameWithoutExtension($source)
+
+          $log = Join-Path `
+            $sourceDir `
+            "$sourceName.log"
+
+          $ex5 = Join-Path `
+            $sourceDir `
+            "$sourceName.ex5"
+
           Write-Host "=== COMPILING KINGSBOT ==="
           Write-Host "MetaEditor: $editor"
           Write-Host "Source: $source"
+          Write-Host "Source directory: $sourceDir"
+          Write-Host "Expected log: $log"
+          Write-Host "Expected EX5: $ex5"
 
           if (-not (Test-Path $editor)) {
             Write-Error "MetaEditor executable does not exist."
@@ -145,143 +155,91 @@ jobs:
             exit 1
           }
 
-          $sourceDirectory = Split-Path $source -Parent
-          $sourceName = Split-Path $source -Leaf
-          $sourceBase = [System.IO.Path]::GetFileNameWithoutExtension($source)
+          if (Test-Path $log) {
+            Remove-Item `
+              -Path $log `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
 
-          $log = Join-Path $sourceDirectory "$sourceBase.log"
+          if (Test-Path $ex5) {
+            Remove-Item `
+              -Path $ex5 `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
 
-          Write-Host "Source directory: $sourceDirectory"
-          Write-Host "Expected log: $log"
-
-          Write-Host ""
           Write-Host "Starting MetaEditor..."
 
           & $editor "/compile:$source" "/log"
 
-          $exitCode = $LASTEXITCODE
+          $metaEditorExitCode = $LASTEXITCODE
 
-          Write-Host ""
-          Write-Host "MetaEditor exit code: $exitCode"
+          Write-Host "MetaEditor exit code: $metaEditorExitCode"
+
+          Start-Sleep -Seconds 3
+
+          Write-Host "=== SEARCHING FOR COMPILE OUTPUT ==="
 
           if (Test-Path $log) {
-            Write-Host ""
-            Write-Host "=== METAEDITOR COMPILE LOG ==="
+            Write-Host "=== COMPILE LOG ==="
             Get-Content $log
           }
           else {
-            Write-Host ""
-            Write-Host "WARNING: Expected compile log was not found."
-            Write-Host "Searching for log files..."
+            Write-Host "Expected log was not found at:"
+            Write-Host $log
+
+            Write-Host "Searching source directory for log files..."
 
             Get-ChildItem `
-              -Path $env:GITHUB_WORKSPACE `
+              -Path $sourceDir `
               -Filter "*.log" `
-              -Recurse `
               -File `
               -ErrorAction SilentlyContinue |
-              Select-Object FullName
+              ForEach-Object {
+                Write-Host "Found log:"
+                Write-Host $_.FullName
+                Get-Content $_.FullName
+              }
           }
 
-          if ($exitCode -ne 0) {
-            Write-Error "MetaEditor returned exit code $exitCode."
+          if (Test-Path $ex5) {
+            Write-Host "=== BUILD SUCCESS ==="
+            Write-Host "EX5 file created:"
+            Write-Host $ex5
+          }
+          else {
+            Write-Error "Compilation did not produce an EX5 file."
             exit 1
           }
 
       - name: Verify build
         shell: powershell
         run: |
-          Write-Host "=== SEARCHING FOR EX5 FILES ==="
+          Write-Host "=== EX5 FILES ==="
 
           $files = Get-ChildItem `
             -Path $env:GITHUB_WORKSPACE `
-            -Filter "*.ex5" `
             -Recurse `
+            -Filter "*.ex5" `
             -File `
             -ErrorAction SilentlyContinue
 
           if (-not $files) {
-            Write-Error "No .ex5 file was created."
-
-            Write-Host ""
-            Write-Host "=== ALL FILES IN WORKSPACE ==="
-
-            Get-ChildItem `
-              -Path $env:GITHUB_WORKSPACE `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Select-Object FullName
-
+            Write-Error "No .ex5 file was found."
             exit 1
           }
-
-          Write-Host "=== EX5 FILES FOUND ==="
 
           $files |
             Select-Object FullName, Length, LastWriteTime
 
-      - name: Prepare build artifacts
-        shell: powershell
-        run: |
-          $artifactDir = Join-Path $env:GITHUB_WORKSPACE "KingsBot-Build"
-
-          New-Item `
-            -ItemType Directory `
-            -Path $artifactDir `
-            -Force |
-            Out-Null
-
-          Write-Host "=== PREPARING ARTIFACTS ==="
-
-          $files = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Filter "*.ex5" `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue
-
-          if (-not $files) {
-            Write-Error "No EX5 files available for artifact upload."
-            exit 1
-          }
-
-          foreach ($file in $files) {
-            Write-Host "Copying: $($file.FullName)"
-
-            Copy-Item `
-              -Path $file.FullName `
-              -Destination $artifactDir `
-              -Force
-          }
-
-          $logs = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Filter "*.log" `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue
-
-          foreach ($log in $logs) {
-            Write-Host "Copying log: $($log.FullName)"
-
-            Copy-Item `
-              -Path $log.FullName `
-              -Destination $artifactDir `
-              -Force
-          }
-
-          Write-Host ""
-          Write-Host "=== ARTIFACT DIRECTORY ==="
-
-          Get-ChildItem `
-            -Path $artifactDir `
-            -File |
-            Select-Object Name, Length, LastWriteTime
+          Write-Host "Build verification successful."
 
       - name: Upload build results
         uses: actions/upload-artifact@v4
         with:
-          name: KingsBot-Phase6-Build
-          path: KingsBot-Build
+          name: KingsBot-Build
+          path: |
+            **/*.ex5
+            **/*.log
           if-no-files-found: error
