@@ -10,7 +10,12 @@ jobs:
     steps:
       - name: Get KingsBot source
         uses: actions/checkout@v4
-
+      - name: Install MetaTrader 5
+        shell: powershell
+        run: |
+          $installer = "$env:RUNNER_TEMP\mt5setup.exe"
+          Invoke-WebRequest -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile $installer
+          Start-Process $installer -ArgumentList "/auto" -Wait
       - name: Find MetaEditor
         id: metaeditor
         shell: powershell
@@ -60,9 +65,3 @@ jobs:
           
           
           if-no-files-found: warn
-                - name: Install MetaTrader 5
-        shell: powershell
-        run: |
-          $installer = "$env:RUNNER_TEMP\mt5setup.exe"
-          Invoke-WebRequest -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile $installer
-          Start-Process $installer -ArgumentList "/auto","/path:$env:RUNNER_TEMP\MetaTrader5" -Wait
