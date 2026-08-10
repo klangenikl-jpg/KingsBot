@@ -57,6 +57,8 @@ jobs:
           path: |
             compile.log
             **/*.ex5
+          
+          
           if-no-files-found: warn
                 - name: Install MetaTrader 5
         shell: powershell
