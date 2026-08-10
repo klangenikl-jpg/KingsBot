@@ -23,11 +23,25 @@ jobs:
         run: |
           $installer = "$env:RUNNER_TEMP\mt5setup.exe"
 
+          Write-Host "Downloading MetaTrader 5 installer..."
+
           Invoke-WebRequest `
             -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" `
             -OutFile $installer
 
-          Start-Process $installer -ArgumentList "/auto" -Wait
+          if (-not (Test-Path $installer)) {
+            Write-Error "MetaTrader 5 installer was not downloaded."
+            exit 1
+          }
+
+          Write-Host "Installing MetaTrader 5..."
+
+          Start-Process `
+            -FilePath $installer `
+            -ArgumentList "/auto" `
+            -Wait
+
+          Write-Host "MetaTrader 5 installation finished."
 
       - name: Find MetaEditor
         id: metaeditor
@@ -46,10 +60,13 @@ jobs:
 
           foreach ($root in $roots) {
             if (Test-Path $root) {
+              Write-Host "Searching: $root"
+
               $found = Get-ChildItem `
                 -Path $root `
                 -Filter "metaeditor64.exe" `
                 -Recurse `
+                -File `
                 -ErrorAction SilentlyContinue |
                 Select-Object -First 1
 
@@ -64,74 +81,7 @@ jobs:
             exit 1
           }
 
-          Write-Host "MetaEditor found at: $($found.FullName)"
-          "path=$($found.FullName)" >> $env:GITHUB_OUTPUT
+          Write-Host "MetaEditor found at:"
+          Write-Host $found.FullName
 
-      - name: Find KingsBot source
-        id: source
-        shell: powershell
-        run: |
-          $source = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Filter "KingsBot.mq5" `
-            -Recurse `
-            -File |
-            Select-Object -First 1
-
-          if (-not $source) {
-            Write-Error "KingsBot.mq5 was not found."
-            exit 1
-          }
-
-          Write-Host "Source found at: $($source.FullName)"
-          "path=$($source.FullName)" >> $env:GITHUB_OUTPUT
-
-      - name: Compile KingsBot
-        shell: powershell
-        run: |
-          $editor = "${{ steps.metaeditor.outputs.path }}"
-          $source = "${{ steps.source.outputs.path }}"
-          $log = Join-Path $env:GITHUB_WORKSPACE "compile.log"
-
-          Write-Host "=== COMPILING KINGSBOT ==="
-          Write-Host "MetaEditor: $editor"
-          Write-Host "Source: $source"
-
-          & $editor "/compile:$source" "/log:$log"
-
-          if (Test-Path $log) {
-            Get-Content $log
-          } else {
-            Write-Error "MetaEditor did not create compile.log"
-            exit 1
-          }
-
-      - name: Verify build
-        shell: powershell
-        run: |
-          Write-Host "=== EX5 FILES ==="
-
-          $files = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Recurse `
-            -Filter "*.ex5" `
-            -File
-
-          if (-not $files) {
-            Write-Error "No .ex5 file was produced."
-            exit 1
-          }
-
-          $files | Select-Object FullName, Length, LastWriteTime
-
-          Write-Host "=== COMPILE LOG ==="
-          Get-Content (Join-Path $env:GITHUB_WORKSPACE "compile.log")
-
-      - name: Upload build results
-        uses: actions/upload-artifact@v4
-        with:
-          name: KingsBot-Phase6-Build
-          path: |
-            compile.log
-            **/*.ex5
-          if-no-files-found: error
+          "path=$($found.FullName)"
