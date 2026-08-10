@@ -1,0 +1,22 @@
+name: KingsBot MQL5 Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Get KingsBot source
+        uses: actions/checkout@v4
+
+      - name: Show source files
+        shell: powershell
+        run: |
+          Get-ChildItem -Recurse -File | Select-Object FullName
+
+      - name: Build status
+        shell: powershell
+        run: |
+          Write-Host "KingsBot Windows build runner is working."
