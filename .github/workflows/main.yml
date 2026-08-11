@@ -89,7 +89,10 @@ jobs:
               Remove-Item -LiteralPath $installDir -Recurse -Force
             }
 
-            New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+            New-Item `
+              -ItemType Directory `
+              -Path $installDir `
+              -Force | Out-Null
 
             Write-Host "Starting MT5 automatic installation..."
 
@@ -101,16 +104,13 @@ jobs:
             Write-Host "Installer PID: $($process.Id)"
 
             $deadline = (Get-Date).AddMinutes(8)
-            $metaEditor = $null
 
             while ((Get-Date) -lt $deadline) {
               Start-Sleep -Seconds 10
 
-              if (-not $process.HasExited) {
-                Write-Host "MT5 installer is still running..."
-              }
-
-              $candidate = Join-Path $installDir 'MetaEditor64.exe'
+              $candidate = Join-Path `
+                $installDir `
+                'MetaEditor64.exe'
 
               if (Test-Path -LiteralPath $candidate) {
                 $metaEditor = $candidate
@@ -122,16 +122,17 @@ jobs:
               if (-not [string]::IsNullOrWhiteSpace($metaEditor)) {
                 break
               }
+
+              Write-Host "Waiting for MetaEditor..."
             }
 
             if ($process.HasExited) {
               Write-Host "MT5 installer exit code: $($process.ExitCode)"
-              Write-Host "Continuing because installation may have completed despite the installer exit code."
             }
           }
 
           if ([string]::IsNullOrWhiteSpace($metaEditor)) {
-            throw "MetaEditor64.exe could not be located after the MT5 installation attempt."
+            throw "MetaEditor64.exe could not be located."
           }
 
           if (-not (Test-Path -LiteralPath $metaEditor)) {
@@ -148,18 +149,34 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $buildRoot = Join-Path $env:RUNNER_TEMP 'KingsBotBuild'
+          $buildRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            'KingsBotBuild'
 
           if (Test-Path -LiteralPath $buildRoot) {
-            Remove-Item -LiteralPath $buildRoot -Recurse -Force
+            Remove-Item `
+              -LiteralPath $buildRoot `
+              -Recurse `
+              -Force
           }
 
-          New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Path $buildRoot `
+            -Force | Out-Null
 
-          $mql5Root = Join-Path $buildRoot 'MQL5'
-          New-Item -ItemType Directory -Path $mql5Root -Force | Out-Null
+          $mql5Root = Join-Path `
+            $buildRoot `
+            'MQL5'
 
-          $repoMql5 = Join-Path $env:GITHUB_WORKSPACE 'MQL5'
+          New-Item `
+            -ItemType Directory `
+            -Path $mql5Root `
+            -Force | Out-Null
+
+          $repoMql5 = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'MQL5'
 
           if (Test-Path -LiteralPath $repoMql5) {
             Copy-Item `
@@ -169,15 +186,24 @@ jobs:
               -Force
           }
 
-          $includeRoot = Join-Path $mql5Root 'Include'
+          $includeRoot = Join-Path `
+            $mql5Root `
+            'Include'
 
           if (-not (Test-Path -LiteralPath $includeRoot)) {
-            New-Item -ItemType Directory -Path $includeRoot -Force | Out-Null
+            New-Item `
+              -ItemType Directory `
+              -Path $includeRoot `
+              -Force | Out-Null
           }
 
-          $relativeSource = $env:KINGSBOT_SOURCE.Substring($env:GITHUB_WORKSPACE.Length).TrimStart('\')
+          $relativeSource = $env:KINGSBOT_SOURCE.Substring(
+            $env:GITHUB_WORKSPACE.Length
+          ).TrimStart('\')
 
-          $buildSource = Join-Path $mql5Root $relativeSource
+          $buildSource = Join-Path `
+            $mql5Root `
+            $relativeSource
 
           New-Item `
             -ItemType Directory `
@@ -266,4 +292,55 @@ jobs:
             Write-Host "========================"
           }
 
-          $ex5 = Get
+          $ex5 = Get-ChildItem `
+            -Path $env:KINGSBOT_BUILD_ROOT `
+            -Filter 'KingsBot_Phase6_Integration.ex5' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($null -eq $ex5) {
+            throw "Compilation did not produce KingsBot_Phase6_Integration.ex5."
+          }
+
+          "KINGSBOT_EX5=$($ex5.FullName)" >> $env:GITHUB_ENV
+
+          Write-Host "EX5 created:"
+          Write-Host $ex5.FullName
+
+      - name: Stage artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $artifactDir = Join-Path `
+            $env:RUNNER_TEMP `
+            'KingsBotArtifact'
+
+          if (Test-Path -LiteralPath $artifactDir) {
+            Remove-Item `
+              -LiteralPath $artifactDir `
+              -Recurse `
+              -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $artifactDir `
+            -Force | Out-Null
+
+          Copy-Item `
+            -LiteralPath $env:KINGSBOT_EX5 `
+            -Destination $artifactDir `
+            -Force
+
+          Write-Host "Artifact staged:"
+          Get-ChildItem -LiteralPath $artifactDir
+
+      - name: Upload King's Bot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kings-Bot-EX5
+          path: ${{ runner.temp }}/KingsBotArtifact/*
+          if-no-files-found: error
