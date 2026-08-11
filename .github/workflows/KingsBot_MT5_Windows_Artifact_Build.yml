@@ -1,0 +1,234 @@
+name: King's Bot - MT5 Artifact Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/*.mq5'
+      - '.github/workflows/KingsBot_MT5_Windows_Artifact_Build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 20
+
+    steps:
+      - name: Get King's Bot source
+        uses: actions/checkout@v4
+
+      - name: Install MetaTrader 5
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+
+          Write-Host "Downloading MetaTrader 5 installer..."
+
+          Invoke-WebRequest `
+            -Uri 'https://download.terminalfx.com/mt5setup.exe' `
+            -OutFile $installer
+
+          if (!(Test-Path $installer)) {
+            throw "MetaTrader 5 installer was not downloaded."
+          }
+
+          Write-Host "Starting MetaTrader 5 installer..."
+
+          $process = Start-Process `
+            -FilePath $installer `
+            -ArgumentList '/auto' `
+            -Wait `
+            -PassThru
+
+          Write-Host "Installer exit code: $($process.ExitCode)"
+
+          if ($process.ExitCode -ne 0) {
+            throw "MetaTrader 5 installation failed with exit code $($process.ExitCode)."
+          }
+
+      - name: Locate MetaEditor
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "Searching for MetaEditor64.exe..."
+
+          $roots = @(
+            'C:\MT5',
+            'C:\Program Files',
+            'C:\Program Files (x86)',
+            $env:LOCALAPPDATA
+          )
+
+          $metaEditor = $null
+
+          foreach ($root in $roots) {
+            if (Test-Path $root) {
+              $found = Get-ChildItem `
+                -Path $root `
+                -Filter 'MetaEditor64.exe' `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+
+              if ($found) {
+                $metaEditor = $found.FullName
+                break
+              }
+            }
+          }
+
+          if (!$metaEditor) {
+            throw "MetaEditor64.exe could not be located after MetaTrader 5 installation."
+          }
+
+          Write-Host "MetaEditor found:"
+          Write-Host $metaEditor
+
+          "METAEDITOR=$metaEditor" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Encoding utf8
+
+      - name: Locate King's Bot source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "Searching repository for MQL5 source files..."
+
+          $files = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter '*.mq5' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue
+
+          if (!$files -or $files.Count -eq 0) {
+            throw "No .mq5 source file was found in the repository."
+          }
+
+          Write-Host "MQL5 files found:"
+          $files | ForEach-Object {
+            Write-Host $_.FullName
+          }
+
+          $source = $files |
+            Where-Object { $_.Name -match 'Phase6|Integration|KingsBot' } |
+            Select-Object -First 1
+
+          if (!$source) {
+            $source = $files | Select-Object -First 1
+          }
+
+          Write-Host "Selected source:"
+          Write-Host $source.FullName
+
+          "KINGSBOT_SOURCE=$($source.FullName)" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Encoding utf8
+
+      - name: Compile King's Bot
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $source = $env:KINGSBOT_SOURCE
+          $metaEditor = $env:METAEDITOR
+
+          if (!(Test-Path $source)) {
+            throw "Selected MQL5 source does not exist: $source"
+          }
+
+          if (!(Test-Path $metaEditor)) {
+            throw "MetaEditor does not exist: $metaEditor"
+          }
+
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE 'artifacts'
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+
+          $sourceName = [System.IO.Path]::GetFileNameWithoutExtension($source)
+          $logFile = Join-Path $artifactDir "$sourceName.log"
+
+          Write-Host "======================================"
+          Write-Host "COMPILING KING'S BOT"
+          Write-Host "======================================"
+          Write-Host "MetaEditor:"
+          Write-Host $metaEditor
+          Write-Host "Source:"
+          Write-Host $source
+          Write-Host "Log:"
+          Write-Host $logFile
+
+          $arguments = @(
+            "/compile:`"$source`"",
+            "/log:`"$logFile`""
+          )
+
+          $process = Start-Process `
+            -FilePath $metaEditor `
+            -ArgumentList $arguments `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+
+          Write-Host "MetaEditor exit code: $($process.ExitCode)"
+
+          if (!(Test-Path $logFile)) {
+            Write-Host "WARNING: MetaEditor did not create the expected log file."
+          }
+
+          $ex5 = Get-ChildItem `
+            -Path (Split-Path $source -Parent) `
+            -Filter "$sourceName.ex5" `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (!$ex5) {
+            throw "Compilation did not produce $sourceName.ex5"
+          }
+
+          Copy-Item `
+            -Path $ex5.FullName `
+            -Destination (Join-Path $artifactDir $ex5.Name) `
+            -Force
+
+          Write-Host "EX5 artifact created:"
+          Write-Host (Join-Path $artifactDir $ex5.Name)
+
+      - name: Verify build artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $artifactDir = Join-Path $env:GITHUB_WORKSPACE 'artifacts'
+
+          Write-Host "Artifacts:"
+          Get-ChildItem $artifactDir -File | ForEach-Object {
+            Write-Host "$($_.Name) - $($_.Length) bytes"
+          }
+
+          $ex5 = Get-ChildItem `
+            -Path $artifactDir `
+            -Filter '*.ex5' `
+            -File `
+            -ErrorAction SilentlyContinue
+
+          if (!$ex5) {
+            throw "VERIFICATION FAILED: No .ex5 artifact exists."
+          }
+
+          Write-Host "VERIFICATION PASSED."
+          Write-Host "EX5 file: $($ex5.FullName)"
+
+      - name: Upload King's Bot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingsBot-MT5-Build
+          path: artifacts/
+          if-no-files-found: error
