@@ -1,0 +1,377 @@
+name: King's Bot Build - Wine MT5
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'KingsBot/**'
+      - '.github/workflows/KingsBot_build_Wine.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+
+      - name: Get King's Bot source
+        uses: actions/checkout@v4
+
+      - name: Install Wine and build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            wine \
+            wine64 \
+            wine32 \
+            winbind \
+            xvfb \
+            cabextract \
+            unzip \
+            curl \
+            file
+
+          wine --version
+          wineboot --version
+
+      - name: Initialize Wine environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export WINEPREFIX="$RUNNER_TEMP/kingsbot-wine"
+          export WINEARCH=win64
+
+          echo "WINEPREFIX=$WINEPREFIX" >> "$GITHUB_ENV"
+          echo "WINEARCH=win64" >> "$GITHUB_ENV"
+
+          mkdir -p "$WINEPREFIX"
+
+          xvfb-run -a wineboot --init
+
+          echo "Wine environment initialized."
+
+      - name: Download MetaTrader 5
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          installer="$RUNNER_TEMP/mt5setup.exe"
+
+          curl -L \
+            --fail \
+            --retry 5 \
+            --retry-delay 3 \
+            "https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe" \
+            -o "$installer"
+
+          test -s "$installer"
+
+          echo "MT5 installer downloaded successfully."
+          file "$installer"
+          ls -lh "$installer"
+
+          echo "MT5_INSTALLER=$installer" >> "$GITHUB_ENV"
+
+      - name: Install MetaTrader 5 through Wine
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          echo "========================================"
+          echo " INSTALLING METATRADER 5 THROUGH WINE"
+          echo "========================================"
+
+          install_path='C:\Program Files\MetaTrader 5'
+
+          set +e
+
+          timeout 240s \
+            xvfb-run -a \
+            wine "$MT5_INSTALLER" \
+            /auto \
+            /path:"$install_path"
+
+          installer_status=$?
+
+          set -e
+
+          echo "Installer process status: $installer_status"
+
+          echo ""
+          echo "Searching Wine prefix for MetaTrader..."
+          
+          find "$WINEPREFIX/drive_c" \
+            -type f \
+            \( \
+              -iname 'metaeditor64.exe' \
+              -o -iname 'metaeditor.exe' \
+              -o -iname 'terminal64.exe' \
+            \) \
+            -print \
+            | tee "$RUNNER_TEMP/mt5-files.txt"
+
+          echo ""
+          echo "========================================"
+          echo " INSTALLATION VERIFICATION"
+          echo "========================================"
+
+          if grep -Eiq 'metaeditor(64)?\.exe' "$RUNNER_TEMP/mt5-files.txt"; then
+            echo "MetaEditor installation detected."
+          else
+            echo "::error::MetaEditor was not found after MT5 installation."
+
+            echo ""
+            echo "Wine Program Files:"
+            find "$WINEPREFIX/drive_c/Program Files" \
+              -maxdepth 4 \
+              -type f \
+              -print 2>/dev/null \
+              | head -300 || true
+
+            exit 1
+          fi
+
+      - name: Locate MetaEditor
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          METAEDITOR=$(
+            find "$WINEPREFIX/drive_c" \
+              -type f \
+              \( \
+                -iname 'metaeditor64.exe' \
+                -o -iname 'metaeditor.exe' \
+              \) \
+              -print \
+              | head -n 1
+          )
+
+          if [ -z "$METAEDITOR" ]; then
+            echo "::error::MetaEditor executable was not found."
+            exit 1
+          fi
+
+          echo "MetaEditor Linux path:"
+          echo "$METAEDITOR"
+
+          METAEDITOR_WIN=$(
+            winepath -w "$METAEDITOR"
+          )
+
+          echo "MetaEditor Windows path:"
+          echo "$METAEDITOR_WIN"
+
+          echo "METAEDITOR=$METAEDITOR" >> "$GITHUB_ENV"
+          echo "METAEDITOR_WIN=$METAEDITOR_WIN" >> "$GITHUB_ENV"
+
+      - name: Find King's Bot source
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          expected="$GITHUB_WORKSPACE/KingsBot/KingsBot_Phase6_Integration.mq5"
+
+          if [ -f "$expected" ]; then
+            SOURCE_FILE="$expected"
+          else
+            echo "Expected source not found."
+            echo "Searching repository..."
+
+            SOURCE_FILE=$(
+              find "$GITHUB_WORKSPACE" \
+                -type f \
+                -name 'KingsBot_Phase6_Integration.mq5' \
+                -print \
+                | head -n 1
+            )
+          fi
+
+          if [ -z "$SOURCE_FILE" ] || [ ! -f "$SOURCE_FILE" ]; then
+            echo "::error::KingsBot_Phase6_Integration.mq5 was not found."
+
+            echo ""
+            echo "Available MQ5 files:"
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -name '*.mq5' \
+              -print
+
+            exit 1
+          fi
+
+          echo "SOURCE_FILE=$SOURCE_FILE" >> "$GITHUB_ENV"
+
+          echo "King's Bot source:"
+          echo "$SOURCE_FILE"
+
+      - name: Prepare MQL5 source tree
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          MT5_ROOT="$WINEPREFIX/drive_c/Program Files/MetaTrader 5"
+
+          EXPERT_DIR="$MT5_ROOT/MQL5/Experts/KingsBot"
+
+          mkdir -p "$EXPERT_DIR"
+
+          SOURCE_DIR=$(dirname "$SOURCE_FILE")
+
+          cp -R "$SOURCE_DIR"/. "$EXPERT_DIR"/
+
+          COMPILE_SOURCE="$EXPERT_DIR/KingsBot_Phase6_Integration.mq5"
+
+          if [ ! -f "$COMPILE_SOURCE" ]; then
+            echo "::error::Prepared source file was not found."
+            exit 1
+          fi
+
+          COMPILE_SOURCE_WIN=$(
+            winepath -w "$COMPILE_SOURCE"
+          )
+
+          echo "MT5_ROOT=$MT5_ROOT" >> "$GITHUB_ENV"
+          echo "EXPERT_DIR=$EXPERT_DIR" >> "$GITHUB_ENV"
+          echo "COMPILE_SOURCE=$COMPILE_SOURCE" >> "$GITHUB_ENV"
+          echo "COMPILE_SOURCE_WIN=$COMPILE_SOURCE_WIN" >> "$GITHUB_ENV"
+
+          echo ""
+          echo "Prepared source:"
+          echo "$COMPILE_SOURCE"
+
+          echo ""
+          echo "Windows source path:"
+          echo "$COMPILE_SOURCE_WIN"
+
+      - name: Compile King's Bot
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          LOG_FILE="$EXPERT_DIR/KingsBot_Phase6_Integration.log"
+          EX5_FILE="$EXPERT_DIR/KingsBot_Phase6_Integration.ex5"
+
+          rm -f "$LOG_FILE"
+          rm -f "$EX5_FILE"
+
+          echo "========================================"
+          echo " KING'S BOT COMPILATION"
+          echo "========================================"
+          echo "MetaEditor:"
+          echo "$METAEDITOR_WIN"
+          echo ""
+          echo "Source:"
+          echo "$COMPILE_SOURCE_WIN"
+          echo "========================================"
+
+          set +e
+
+          timeout 180s \
+            xvfb-run -a \
+            wine "$METAEDITOR" \
+            "/compile:$COMPILE_SOURCE_WIN" \
+            /log
+
+          COMPILER_STATUS=$?
+
+          set -e
+
+          echo ""
+          echo "MetaEditor process status: $COMPILER_STATUS"
+
+          sleep 5
+
+          echo ""
+          echo "========================================"
+          echo " COMPILER LOG"
+          echo "========================================"
+
+          if [ -f "$LOG_FILE" ]; then
+            cat "$LOG_FILE"
+          else
+            echo "NO COMPILER LOG WAS CREATED."
+          fi
+
+          echo ""
+          echo "========================================"
+          echo " SEARCHING FOR EX5"
+          echo "========================================"
+
+          find "$EXPERT_DIR" \
+            -type f \
+            \( \
+              -name '*.ex5' \
+              -o -name '*.log' \
+            \) \
+            -print \
+            -exec ls -lh {} \;
+
+          if [ ! -f "$EX5_FILE" ]; then
+            echo "::error::KingsBot_Phase6_Integration.ex5 was not produced."
+
+            echo ""
+            echo "Compiler directory:"
+            find "$EXPERT_DIR" \
+              -maxdepth 3 \
+              -type f \
+              -print
+
+            exit 1
+          fi
+
+          if [ ! -s "$EX5_FILE" ]; then
+            echo "::error::EX5 file exists but is empty."
+            exit 1
+          fi
+
+          echo ""
+          echo "========================================"
+          echo " EX5 SUCCESSFULLY CREATED"
+          echo "========================================"
+
+          ls -lh "$EX5_FILE"
+
+          echo "EX5_FILE=$EX5_FILE" >> "$GITHUB_ENV"
+          echo "LOG_FILE=$LOG_FILE" >> "$GITHUB_ENV"
+
+      - name: Verify build
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f "$EX5_FILE"
+          test -s "$EX5_FILE"
+
+          mkdir -p build-results
+
+          cp "$EX5_FILE" \
+            build-results/KingsBot_Phase6_Integration.ex5
+
+          if [ -f "$LOG_FILE" ]; then
+            cp "$LOG_FILE" \
+              build-results/KingsBot_Phase6_Integration.log
+          fi
+
+          echo "========================================"
+          echo " BUILD VERIFIED"
+          echo "========================================"
+
+          ls -lh build-results
+
+      - name: Upload King's Bot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingsBot-Phase6-Wine-build
+          path: build-results/*
+          if-no-files-found: error
+          retention-days: 14
