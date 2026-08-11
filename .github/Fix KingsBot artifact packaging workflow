@@ -1,0 +1,194 @@
+name: Package King's Bot
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build and Package King's Bot
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+
+      - name: Checkout King's Bot
+        uses: actions/checkout@v4
+
+      - name: Locate King's Bot source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "========================================"
+          Write-Host "LOCATING KING'S BOT SOURCE"
+          Write-Host "========================================"
+
+          $sourceRoot = $env:GITHUB_WORKSPACE
+
+          if ([string]::IsNullOrWhiteSpace($sourceRoot)) {
+              throw "GITHUB_WORKSPACE is not available."
+          }
+
+          Write-Host "Workspace: $sourceRoot"
+
+          if (!(Test-Path -LiteralPath $sourceRoot)) {
+              throw "GitHub workspace does not exist: $sourceRoot"
+          }
+
+          Write-Host ""
+          Write-Host "Repository contents:"
+          Get-ChildItem -LiteralPath $sourceRoot -Force |
+              Select-Object Mode, Name |
+              Format-Table -AutoSize
+
+      - name: Locate MQL5 source files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $root = $env:GITHUB_WORKSPACE
+
+          Write-Host "========================================"
+          Write-Host "SEARCHING FOR KING'S BOT MQL5 FILES"
+          Write-Host "========================================"
+
+          $mq5Files = @(
+              Get-ChildItem `
+                -LiteralPath $root `
+                -Filter "*.mq5" `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue
+          )
+
+          if ($mq5Files.Count -eq 0) {
+              Write-Host "No .mq5 files found."
+              exit 0
+          }
+
+          Write-Host "Found $($mq5Files.Count) MQL5 file(s):"
+
+          foreach ($file in $mq5Files) {
+              Write-Host " - $($file.FullName)"
+          }
+
+      - name: Locate existing EX5 files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $root = $env:GITHUB_WORKSPACE
+
+          Write-Host "========================================"
+          Write-Host "SEARCHING FOR EXISTING EX5 FILES"
+          Write-Host "========================================"
+
+          $ex5Files = @(
+              Get-ChildItem `
+                -LiteralPath $root `
+                -Filter "*.ex5" `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue
+          )
+
+          if ($ex5Files.Count -eq 0) {
+              Write-Host "No existing EX5 files found."
+              exit 0
+          }
+
+          Write-Host "Found $($ex5Files.Count) EX5 file(s):"
+
+          foreach ($file in $ex5Files) {
+              Write-Host " - $($file.FullName)"
+          }
+
+      - name: Prepare build artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host "========================================"
+          Write-Host "PREPARING BUILD ARTIFACTS"
+          Write-Host "========================================"
+
+          $workspace = $env:GITHUB_WORKSPACE
+
+          if ([string]::IsNullOrWhiteSpace($workspace)) {
+              throw "GITHUB_WORKSPACE is empty."
+          }
+
+          $artifactRoot = Join-Path $workspace "artifacts"
+
+          Write-Host "Workspace:"
+          Write-Host $workspace
+
+          Write-Host ""
+          Write-Host "Artifact directory:"
+          Write-Host $artifactRoot
+
+          if (Test-Path -LiteralPath $artifactRoot) {
+              Remove-Item `
+                -LiteralPath $artifactRoot `
+                -Recurse `
+                -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $artifactRoot `
+            -Force | Out-Null
+
+          Write-Host ""
+          Write-Host "Artifact directory created successfully."
+
+          $ex5Files = @(
+              Get-ChildItem `
+                -LiteralPath $workspace `
+                -Filter "*.ex5" `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue
+          )
+
+          foreach ($file in $ex5Files) {
+              Copy-Item `
+                -LiteralPath $file.FullName `
+                -Destination $artifactRoot `
+                -Force
+          }
+
+          Write-Host ""
+          Write-Host "Artifacts prepared successfully."
+
+      - name: Upload King's Bot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingsBot-MT5-Artifacts
+          path: artifacts/
+          if-no-files-found: warn
+
+      - name: Build summary
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host "KING'S BOT PACKAGE WORKFLOW COMPLETE"
+          Write-Host "========================================"
+
+          Write-Host ""
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+          Write-Host "Runner OS: $env:RUNNER_OS"
+
+          if (Test-Path -LiteralPath "$env:GITHUB_WORKSPACE\artifacts") {
+              Write-Host ""
+              Write-Host "Artifact contents:"
+              Get-ChildItem `
+                -LiteralPath "$env:GITHUB_WORKSPACE\artifacts" `
+                -Force
+          }
