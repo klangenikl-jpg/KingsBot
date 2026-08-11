@@ -37,6 +37,7 @@ jobs:
 
           Write-Host ""
           Write-Host "MQL5 source files:"
+
           $sources = Get-ChildItem `
             -Path $env:GITHUB_WORKSPACE `
             -Recurse `
@@ -66,7 +67,10 @@ jobs:
             Remove-Item $mt5Root -Recurse -Force
           }
 
-          New-Item -ItemType Directory -Path $mt5Root -Force | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Path $mt5Root `
+            -Force | Out-Null
 
           "MT5_ROOT=$mt5Root" | Out-File `
             -FilePath $env:GITHUB_ENV `
@@ -80,12 +84,17 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $installer = Join-Path $env:RUNNER_TEMP "mt5setup.exe"
+          $installer = Join-Path `
+            $env:RUNNER_TEMP `
+            "mt5setup.exe"
 
-          $uri = "https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe"
+          $uri = "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
 
-          Write-Host "Downloading official MetaTrader 5 installer..."
-          Write-Host $uri
+          Write-Host "========================================"
+          Write-Host "DOWNLOADING METATRADER 5"
+          Write-Host "========================================"
+
+          Write-Host "Downloading MetaTrader 5 installer..."
 
           Invoke-WebRequest `
             -Uri $uri `
@@ -124,12 +133,14 @@ jobs:
           Write-Host "Installer: $installer"
           Write-Host "Target:    $mt5Root"
 
+          $arguments = @(
+            "/auto",
+            "/path:`"$mt5Root`""
+          )
+
           $process = Start-Process `
             -FilePath $installer `
-            -ArgumentList @(
-              "/auto",
-              "/path:`"$mt5Root`""
-            ) `
+            -ArgumentList $arguments `
             -Wait `
             -PassThru
 
@@ -138,7 +149,7 @@ jobs:
 
           if ($process.ExitCode -ne 0) {
             Write-Warning "Installer returned exit code $($process.ExitCode)."
-            Write-Warning "We will verify the actual installation before failing."
+            Write-Warning "Continuing to verify whether MetaEditor was installed."
           }
 
       - name: Locate MetaEditor
@@ -161,20 +172,22 @@ jobs:
           $editors = @()
 
           foreach ($root in $roots) {
+
             if (Test-Path $root) {
+
               Write-Host "Searching: $root"
 
               $found = Get-ChildItem `
                 -Path $root `
                 -Recurse `
                 -File `
-                -ErrorAction SilentlyContinue `
-                | Where-Object {
-                    $_.Name -in @(
-                      "metaeditor64.exe",
-                      "metaeditor.exe"
-                    )
-                  }
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.Name -in @(
+                    "metaeditor64.exe",
+                    "metaeditor.exe"
+                  )
+                }
 
               if ($found) {
                 $editors += $found
@@ -182,16 +195,22 @@ jobs:
             }
           }
 
-          $editors = $editors | Sort-Object FullName -Unique
+          $editors = $editors |
+            Sort-Object FullName -Unique
 
           if ($editors.Count -eq 0) {
+
             Write-Host ""
             Write-Host "No MetaEditor installation was found."
 
             Write-Host ""
             Write-Host "MT5 target directory contents:"
+
             if (Test-Path $env:MT5_ROOT) {
-              Get-ChildItem $env:MT5_ROOT -Recurse -ErrorAction SilentlyContinue |
+              Get-ChildItem `
+                $env:MT5_ROOT `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
                 Select-Object FullName |
                 Format-Table -AutoSize
             }
@@ -219,13 +238,21 @@ jobs:
           Write-Host "PREPARING KING'S BOT SOURCE"
           Write-Host "========================================"
 
-          $buildRoot = Join-Path $env:RUNNER_TEMP "KingsBot-MQL5"
+          $buildRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            "KingsBot-MQL5"
 
           if (Test-Path $buildRoot) {
-            Remove-Item $buildRoot -Recurse -Force
+            Remove-Item `
+              $buildRoot `
+              -Recurse `
+              -Force
           }
 
-          New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Path $buildRoot `
+            -Force | Out-Null
 
           $sources = Get-ChildItem `
             -Path $env:GITHUB_WORKSPACE `
@@ -240,8 +267,13 @@ jobs:
               $env:GITHUB_WORKSPACE.Length
             ).TrimStart('\')
 
-            $destination = Join-Path $buildRoot $relative
-            $destinationDir = Split-Path $destination -Parent
+            $destination = Join-Path `
+              $buildRoot `
+              $relative
+
+            $destinationDir = Split-Path `
+              $destination `
+              -Parent
 
             New-Item `
               -ItemType Directory `
@@ -256,6 +288,7 @@ jobs:
 
           Write-Host ""
           Write-Host "Prepared source tree:"
+
           Get-ChildItem `
             -Path $buildRoot `
             -Recurse `
@@ -363,10 +396,15 @@ jobs:
           Write-Host "PREPARING ARTIFACTS"
           Write-Host "========================================"
 
-          $artifactRoot = Join-Path $env:RUNNER_TEMP "KingsBot-artifacts"
+          $artifactRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            "KingsBot-artifacts"
 
           if (Test-Path $artifactRoot) {
-            Remove-Item $artifactRoot -Recurse -Force
+            Remove-Item `
+              $artifactRoot `
+              -Recurse `
+              -Force
           }
 
           New-Item `
@@ -385,6 +423,7 @@ jobs:
           }
 
           foreach ($file in $ex5Files) {
+
             Copy-Item `
               -Path $file.FullName `
               -Destination $artifactRoot `
@@ -393,6 +432,7 @@ jobs:
 
           Write-Host ""
           Write-Host "EX5 artifacts:"
+
           Get-ChildItem $artifactRoot -File |
             Select-Object Name,Length |
             Format-Table -AutoSize
