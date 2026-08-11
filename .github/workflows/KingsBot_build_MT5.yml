@@ -1,0 +1,145 @@
+name: King's Bot Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'KingsBot/**'
+      - '.github/workflows/KingsBot_build_MT5.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 20
+
+    steps:
+      - name: Get King's Bot source
+        uses: actions/checkout@v5
+
+      - name: Install MetaTrader 5
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          $installDir = 'C:\MT5'
+
+          Write-Host '=== INSTALLING METATRADER 5 ==='
+          Invoke-WebRequest -Uri 'https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe' -OutFile $installer
+
+          if (!(Test-Path $installer)) { throw 'MetaTrader 5 installer was not downloaded.' }
+          New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
+          $p = Start-Process -FilePath $installer -ArgumentList '/auto', "/path:`"$installDir`"" -Wait -PassThru
+          Write-Host "MT5 installer exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "MetaTrader 5 installation failed with exit code $($p.ExitCode)." }
+
+      - name: Locate and verify MetaEditor
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host '=== LOCATING METAEDITOR ==='
+
+          $searchRoots = @('C:\MT5','C:\Program Files\MetaTrader 5','C:\Program Files (x86)\MetaTrader 5')
+          $editor = $null
+          foreach ($root in $searchRoots) {
+            if (Test-Path $root) {
+              $editor = Get-ChildItem -Path $root -Filter 'metaeditor64.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
+              if ($editor) { break }
+            }
+          }
+
+          if (-not $editor) {
+            Write-Host 'MetaEditor was not found after installation.'
+            Get-ChildItem -Path 'C:\MT5' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 200 FullName
+            throw 'MetaEditor64.exe was not found.'
+          }
+
+          Write-Host "MetaEditor found: $editor"
+          "METAEDITOR=$editor" | Out-File $env:GITHUB_ENV -Encoding utf8
+
+      - name: Prepare King's Bot source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'KingsBot\KingsBot_Phase6_Integration.mq5'
+
+          Write-Host "Expected source: $source"
+          if (!(Test-Path $source)) {
+            Write-Host 'MQ5 files found in repository:'
+            Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter '*.mq5' -Recurse -File | Select-Object FullName
+            throw "KingsBot_Phase6_Integration.mq5 was not found at $source"
+          }
+
+          $destination = 'C:\MT5\MQL5\Experts\KingsBot'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          Copy-Item -Path (Join-Path $env:GITHUB_WORKSPACE 'KingsBot\*') -Destination $destination -Recurse -Force
+
+          $compileSource = Join-Path $destination 'KingsBot_Phase6_Integration.mq5'
+          if (!(Test-Path $compileSource)) { throw "Prepared source was not found at $compileSource" }
+          "COMPILE_SOURCE=$compileSource" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Prepared source: $compileSource"
+
+      - name: Compile King's Bot
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host '=== KING''S BOT COMPILER ==='
+          Write-Host "MetaEditor: $env:METAEDITOR"
+          Write-Host "Source: $env:COMPILE_SOURCE"
+
+          if (!(Test-Path $env:METAEDITOR)) { throw 'MetaEditor executable was not found before compilation.' }
+          if (!(Test-Path $env:COMPILE_SOURCE)) { throw 'King''s Bot source was not found before compilation.' }
+
+          $log = [System.IO.Path]::ChangeExtension($env:COMPILE_SOURCE, '.log')
+          $ex5 = [System.IO.Path]::ChangeExtension($env:COMPILE_SOURCE, '.ex5')
+          Remove-Item $log, $ex5 -Force -ErrorAction SilentlyContinue
+
+          $arguments = "/compile:`"$env:COMPILE_SOURCE`"", '/log'
+          Write-Host "Arguments: $($arguments -join ' ')"
+          $process = Start-Process -FilePath $env:METAEDITOR -ArgumentList $arguments -Wait -PassThru
+          Write-Host "MetaEditor process exit code: $($process.ExitCode)"
+          Start-Sleep -Seconds 3
+
+          if (Test-Path $log) {
+            Write-Host '=== COMPILER LOG ==='
+            Get-Content $log -Raw | Write-Host
+            Write-Host '=== END COMPILER LOG ==='
+          } else {
+            Write-Host 'WARNING: Expected compiler log was not created.'
+          }
+
+          if (!(Test-Path $ex5)) {
+            Write-Host '=== EX5 NOT FOUND ==='
+            Get-ChildItem -Path (Split-Path $env:COMPILE_SOURCE) -Filter '*.ex5' -File -ErrorAction SilentlyContinue | Select-Object FullName,Length,LastWriteTime
+            throw 'Compilation did not produce the expected EX5 file.'
+          }
+
+          Write-Host "EX5 FOUND: $ex5"
+          Write-Host "EX5 SIZE: $((Get-Item $ex5).Length) bytes"
+
+      - name: Verify build
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ex5 = [System.IO.Path]::ChangeExtension($env:COMPILE_SOURCE, '.ex5')
+          $log = [System.IO.Path]::ChangeExtension($env:COMPILE_SOURCE, '.log')
+          if (!(Test-Path $ex5)) { throw 'Build verification failed: EX5 does not exist.' }
+          $size = (Get-Item $ex5).Length
+          if ($size -le 0) { throw 'Build verification failed: EX5 is empty.' }
+
+          New-Item -ItemType Directory -Force -Path 'build-results' | Out-Null
+          Copy-Item $ex5 'build-results\KingsBot_Phase6_Integration.ex5' -Force
+          if (Test-Path $log) { Copy-Item $log 'build-results\KingsBot_Phase6_Integration.log' -Force }
+          Write-Host "BUILD VERIFIED: $size bytes"
+          Get-ChildItem 'build-results' | Select-Object Name,Length
+
+      - name: Upload build results
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingsBot-Phase6-build
+          path: build-results/*
+          if-no-files-found: error
+          retention-days: 14
