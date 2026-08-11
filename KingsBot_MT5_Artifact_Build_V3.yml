@@ -1,0 +1,516 @@
+name: King's Bot - MT5 Artifact Build V3
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/*.mq5'
+      - '**/*.mqh'
+      - '**/*.ex5'
+      - '.github/workflows/KingsBot_MT5_Artifact_Build_V3.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Package King's Bot
+    runs-on: windows-2025
+    timeout-minutes: 15
+
+    steps:
+
+      # =========================================================
+      # 1. CHECK OUT THE REPOSITORY
+      # =========================================================
+      - name: Get King's Bot source
+        uses: actions/checkout@v4
+
+
+      # =========================================================
+      # 2. LOCATE KING'S BOT SOURCE
+      # =========================================================
+      - name: Locate King's Bot source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = (Get-Location).Path
+
+          Write-Host "========================================"
+          Write-Host " LOCATING KING'S BOT SOURCE"
+          Write-Host "========================================"
+          Write-Host "Workspace: $workspace"
+          Write-Host ""
+
+          $mq5Files = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Recurse `
+              -File `
+              -Filter '*.mq5' `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\artifacts\\'
+            }
+          )
+
+          $mqhFiles = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Recurse `
+              -File `
+              -Filter '*.mqh' `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\artifacts\\'
+            }
+          )
+
+          Write-Host "MQ5 files found: $($mq5Files.Count)"
+          Write-Host "MQH files found: $($mqhFiles.Count)"
+          Write-Host ""
+
+          foreach ($file in $mq5Files) {
+            Write-Host "MQ5: $($file.FullName)"
+          }
+
+          foreach ($file in $mqhFiles) {
+            Write-Host "MQH: $($file.FullName)"
+          }
+
+          if ($mq5Files.Count -eq 0) {
+            throw "NO .mq5 FILES FOUND IN THE REPOSITORY."
+          }
+
+          Write-Host ""
+          Write-Host "KING'S BOT SOURCE FOUND."
+
+
+      # =========================================================
+      # 3. VALIDATE MQL5 SOURCE
+      # =========================================================
+      - name: Validate MQL5 source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = (Get-Location).Path
+
+          Write-Host "========================================"
+          Write-Host " VALIDATING MQL5 SOURCE"
+          Write-Host "========================================"
+
+          $files = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Recurse `
+              -File `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              ($_.Extension -eq '.mq5' -or
+               $_.Extension -eq '.mqh') -and
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\artifacts\\'
+            }
+          )
+
+          if ($files.Count -eq 0) {
+            throw "NO MQL5 SOURCE FILES FOUND."
+          }
+
+          foreach ($file in $files) {
+
+            Write-Host "Checking: $($file.FullName)"
+
+            $content = Get-Content `
+              -LiteralPath $file.FullName `
+              -Raw
+
+            if ([string]::IsNullOrWhiteSpace($content)) {
+              throw "EMPTY SOURCE FILE: $($file.FullName)"
+            }
+
+            if ($content.IndexOf([char]0) -ge 0) {
+              throw "NULL BYTE FOUND IN: $($file.FullName)"
+            }
+          }
+
+          Write-Host ""
+          Write-Host "SOURCE VALIDATION PASSED."
+
+
+      # =========================================================
+      # 4. PREPARE ARTIFACT DIRECTORIES
+      # =========================================================
+      - name: Prepare build artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = (Get-Location).Path
+
+          Write-Host "========================================"
+          Write-Host " PREPARING BUILD ARTIFACTS"
+          Write-Host "========================================"
+          Write-Host "Workspace: $workspace"
+
+          $artifactRoot = Join-Path `
+            -Path $workspace `
+            -ChildPath 'artifacts'
+
+          $sourceRoot = Join-Path `
+            -Path $artifactRoot `
+            -ChildPath 'KingsBot_Source'
+
+          $compiledRoot = Join-Path `
+            -Path $artifactRoot `
+            -ChildPath 'KingsBot_Compiled'
+
+          New-Item `
+            -ItemType Directory `
+            -Path $artifactRoot `
+            -Force |
+            Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Path $sourceRoot `
+            -Force |
+            Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Path $compiledRoot `
+            -Force |
+            Out-Null
+
+          Write-Host ""
+          Write-Host "Artifact root:"
+          Write-Host $artifactRoot
+          Write-Host ""
+          Write-Host "Artifact directories created successfully."
+
+
+      # =========================================================
+      # 5. PACKAGE ALL MQL5 SOURCE
+      # =========================================================
+      - name: Package MQL5 source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = (Get-Location).Path
+
+          $sourceRoot = Join-Path `
+            -Path $workspace `
+            -ChildPath 'artifacts\KingsBot_Source'
+
+          Write-Host "========================================"
+          Write-Host " PACKAGING MQL5 SOURCE"
+          Write-Host "========================================"
+
+          $files = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Recurse `
+              -File `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              ($_.Extension -eq '.mq5' -or
+               $_.Extension -eq '.mqh') -and
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\artifacts\\'
+            }
+          )
+
+          if ($files.Count -eq 0) {
+            throw "NO MQL5 FILES AVAILABLE FOR PACKAGING."
+          }
+
+          foreach ($file in $files) {
+
+            $relativePath = $file.FullName.Substring(
+              $workspace.Length
+            ).TrimStart('\')
+
+            $destination = Join-Path `
+              -Path $sourceRoot `
+              -ChildPath $relativePath
+
+            $parent = Split-Path `
+              -Path $destination `
+              -Parent
+
+            New-Item `
+              -ItemType Directory `
+              -Path $parent `
+              -Force |
+              Out-Null
+
+            Copy-Item `
+              -LiteralPath $file.FullName `
+              -Destination $destination `
+              -Force
+
+            Write-Host "Packaged: $relativePath"
+          }
+
+          Write-Host ""
+          Write-Host "MQL5 SOURCE PACKAGING PASSED."
+
+
+      # =========================================================
+      # 6. PACKAGE EXISTING EX5 FILES IF PRESENT
+      # =========================================================
+      - name: Package existing EX5 files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = (Get-Location).Path
+
+          $compiledRoot = Join-Path `
+            -Path $workspace `
+            -ChildPath 'artifacts\KingsBot_Compiled'
+
+          Write-Host "========================================"
+          Write-Host " CHECKING FOR EX5 FILES"
+          Write-Host "========================================"
+
+          $ex5Files = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Recurse `
+              -File `
+              -Filter '*.ex5' `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\artifacts\\'
+            }
+          )
+
+          Write-Host "EX5 files found: $($ex5Files.Count)"
+          Write-Host ""
+
+          foreach ($file in $ex5Files) {
+
+            Copy-Item `
+              -LiteralPath $file.FullName `
+              -Destination $compiledRoot `
+              -Force
+
+            Write-Host "Packaged EX5: $($file.Name)"
+          }
+
+          Write-Host ""
+          Write-Host "EX5 CHECK PASSED."
+
+
+      # =========================================================
+      # 7. CREATE SOURCE ZIP
+      # =========================================================
+      - name: Create King's Bot source ZIP
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = (Get-Location).Path
+
+          $sourceRoot = Join-Path `
+            -Path $workspace `
+            -ChildPath 'artifacts\KingsBot_Source'
+
+          $zipPath = Join-Path `
+            -Path $workspace `
+            -ChildPath 'artifacts\KingsBot_MQL5_Source.zip'
+
+          Write-Host "========================================"
+          Write-Host " CREATING SOURCE ZIP"
+          Write-Host "========================================"
+
+          if (!(Test-Path -LiteralPath $sourceRoot)) {
+            throw "SOURCE ARTIFACT DIRECTORY DOES NOT EXIST."
+          }
+
+          Compress-Archive `
+            -Path "$sourceRoot\*" `
+            -DestinationPath $zipPath `
+            -Force
+
+          if (!(Test-Path -LiteralPath $zipPath)) {
+            throw "SOURCE ZIP WAS NOT CREATED."
+          }
+
+          Write-Host ""
+          Write-Host "SOURCE ZIP CREATED:"
+          Write-Host $zipPath
+
+
+      # =========================================================
+      # 8. CREATE BUILD REPORT
+      # =========================================================
+      - name: Create build report
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = (Get-Location).Path
+
+          $reportPath = Join-Path `
+            -Path $workspace `
+            -ChildPath 'artifacts\BUILD_REPORT.txt'
+
+          Write-Host "========================================"
+          Write-Host " CREATING BUILD REPORT"
+          Write-Host "========================================"
+
+          $mq5Count = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Recurse `
+              -File `
+              -Filter '*.mq5' `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\artifacts\\'
+            }
+          ).Count
+
+          $mqhCount = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Recurse `
+              -File `
+              -Filter '*.mqh' `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\artifacts\\'
+            }
+          ).Count
+
+          $ex5Count = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Recurse `
+              -File `
+              -Filter '*.ex5' `
+              -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\' -and
+              $_.FullName -notmatch '\\artifacts\\'
+            }
+          ).Count
+
+          $report = @"
+KING'S BOT MT5 BUILD REPORT
+===========================
+
+Repository:
+$env:GITHUB_REPOSITORY
+
+Commit:
+$env:GITHUB_SHA
+
+MQ5 files detected:
+$mq5Count
+
+MQH files detected:
+$mqhCount
+
+EX5 files detected:
+$ex5Count
+
+Source validation:
+PASSED
+
+Artifact preparation:
+PASSED
+
+MQL5 packaging:
+PASSED
+
+Source ZIP:
+CREATED
+
+This V3 workflow intentionally does NOT
+download MetaTrader 5, Wine, or MetaEditor.
+
+The purpose of this stage is to establish
+a reliable King's Bot artifact pipeline first.
+
+Next stage:
+MT5 compilation / EX5 generation.
+"@
+
+          $report |
+            Out-File `
+              -FilePath $reportPath `
+              -Encoding utf8
+
+          Write-Host ""
+          Write-Host "BUILD REPORT CREATED."
+
+
+      # =========================================================
+      # 9. FINAL ARTIFACT VERIFICATION
+      # =========================================================
+      - name: Verify final artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = (Get-Location).Path
+
+          $artifactRoot = Join-Path `
+            -Path $workspace `
+            -ChildPath 'artifacts'
+
+          Write-Host "========================================"
+          Write-Host " FINAL ARTIFACT VERIFICATION"
+          Write-Host "========================================"
+
+          if (!(Test-Path -LiteralPath $artifactRoot)) {
+            throw "ARTIFACT ROOT DOES NOT EXIST."
+          }
+
+          $files = @(
+            Get-ChildItem `
+              -Path $artifactRoot `
+              -Recurse `
+              -File
+          )
+
+          Write-Host ""
+          Write-Host "Artifact files found: $($files.Count)"
+          Write-Host ""
+
+          if ($files.Count -eq 0) {
+            throw "ARTIFACT DIRECTORY IS EMPTY."
+          }
+
+          foreach ($file in $files) {
+            Write-Host "ARTIFACT: $($file.FullName)"
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host " KING'S BOT ARTIFACT PIPELINE PASSED"
+          Write-Host "========================================"
+
+
+      # =========================================================
+      # 10. UPLOAD ARTIFACT
+      # =========================================================
+      - name: Upload King's Bot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingsBot-MT5-Build-V3
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
