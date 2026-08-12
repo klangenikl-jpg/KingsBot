@@ -13,48 +13,40 @@ jobs:
   build:
     name: Build King's Bot
     runs-on: windows-latest
+    timeout-minutes: 20
 
     env:
-      MT5_ROOT: C:\MT5
-      BOT_NAME: KingsBot
       BOT_SOURCE_NAME: KingsBot_Phase6_Integration.mq5
 
     steps:
-      # ============================================================
-      # 1. CHECKOUT
-      # ============================================================
       - name: Checkout King's Bot
         uses: actions/checkout@v4
 
-      # ============================================================
-      # 2. LOCATE / INSTALL MT5
-      # ============================================================
-      - name: Install and locate MetaTrader 5
+      - name: Locate MetaEditor
         shell: pwsh
         timeout-minutes: 5
         run: |
           $ErrorActionPreference = "Stop"
 
           Write-Host "========================================="
-          Write-Host "INSTALLING / LOCATING METATRADER 5"
+          Write-Host "LOCATING METATRADER 5 / METAEDITOR"
           Write-Host "========================================="
 
-          $root = $env:MT5_ROOT
-          New-Item -ItemType Directory -Path $root -Force | Out-Null
-
-          $possibleRoots = @(
-            $root,
-            "C:\Program Files\MetaTrader 5",
-            "C:\Program Files (x86)\MetaTrader 5",
-            "$env:LOCALAPPDATA\Programs\MetaTrader 5"
+          $searchRoots = @(
+            "C:\Program Files",
+            "C:\Program Files (x86)",
+            "C:\MT5",
+            "$env:LOCALAPPDATA"
           )
 
           $metaEditor = $null
 
-          foreach ($candidate in $possibleRoots) {
-            if (Test-Path $candidate) {
+          foreach ($root in $searchRoots) {
+            if (Test-Path $root) {
+              Write-Host "Searching: $root"
+
               $found = Get-ChildItem `
-                -Path $candidate `
+                -Path $root `
                 -Filter "metaeditor64.exe" `
                 -File `
                 -Recurse `
@@ -69,43 +61,35 @@ jobs:
           }
 
           if (-not $metaEditor) {
-            Write-Host "MetaEditor not found locally."
-            Write-Host "Downloading official MetaTrader 5 installer..."
+            Write-Host "MetaEditor was not found."
+            Write-Host "Downloading MetaTrader 5 installer..."
 
-            $installer = Join-Path $env:RUNNER_TEMP "mt5setup.exe"
+            $installer = Join-Path `
+              $env:RUNNER_TEMP `
+              "mt5setup.exe"
 
             Invoke-WebRequest `
               -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" `
-              -OutFile $installer
+              -OutFile $installer `
+              -UseBasicParsing
 
             if (-not (Test-Path $installer)) {
               throw "MetaTrader 5 installer was not downloaded."
             }
 
-            Write-Host "Installer downloaded."
-            Write-Host "Starting installer..."
+            Write-Host "Starting MetaTrader 5 installer..."
 
-            $process = Start-Process `
+            Start-Process `
               -FilePath $installer `
               -ArgumentList "/auto" `
-              -Wait `
-              -PassThru
-
-            Write-Host "Installer exit code: $($process.ExitCode)"
+              -Wait
 
             Start-Sleep -Seconds 5
 
-            $searchRoots = @(
-              "C:\Program Files",
-              "C:\Program Files (x86)",
-              "C:\MT5",
-              $env:LOCALAPPDATA
-            )
-
-            foreach ($searchRoot in $searchRoots) {
-              if (Test-Path $searchRoot) {
+            foreach ($root in $searchRoots) {
+              if (Test-Path $root) {
                 $found = Get-ChildItem `
-                  -Path $searchRoot `
+                  -Path $root `
                   -Filter "metaeditor64.exe" `
                   -File `
                   -Recurse `
@@ -124,21 +108,12 @@ jobs:
             throw "MetaEditor64.exe could not be located."
           }
 
-          $terminalRoot = Split-Path $metaEditor -Parent
-
           Write-Host ""
-          Write-Host "MetaEditor:"
+          Write-Host "MetaEditor found:"
           Write-Host $metaEditor
-          Write-Host ""
-          Write-Host "MT5 root:"
-          Write-Host $terminalRoot
 
           "METAEDITOR_PATH=$metaEditor" >> $env:GITHUB_ENV
-          "MT5_ACTUAL_ROOT=$terminalRoot" >> $env:GITHUB_ENV
 
-      # ============================================================
-      # 3. PREPARE KING'S BOT SOURCE
-      # ============================================================
       - name: Prepare King's Bot source
         shell: pwsh
         run: |
@@ -149,10 +124,42 @@ jobs:
           Write-Host "========================================="
 
           $workspace = $env:GITHUB_WORKSPACE
-          $mt5Root = $env:MT5_ACTUAL_ROOT
 
-          $mql5Root = Join-Path $mt5Root "MQL5"
-          $expertRoot = Join-Path $mql5Root "Experts\KingsBot"
+          $source = Get-ChildItem `
+            -Path $workspace `
+            -Filter $env:BOT_SOURCE_NAME `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $source) {
+            Write-Host ""
+            Write-Host "Available MQ5 files:"
+
+            Get-ChildItem `
+              -Path $workspace `
+              -Filter "*.mq5" `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host $_.FullName
+              }
+
+            throw "King's Bot source '$env:BOT_SOURCE_NAME' was not found."
+          }
+
+          Write-Host "Main source found:"
+          Write-Host $source.FullName
+
+          $buildRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            "KingsBotBuild"
+
+          $expertRoot = Join-Path `
+            $buildRoot `
+            "MQL5\Experts\KingsBot"
 
           New-Item `
             -ItemType Directory `
@@ -160,7 +167,38 @@ jobs:
             -Force |
             Out-Null
 
-          $source = Get-ChildItem `
-            -Path $workspace `
-            -Filter $env:BOT_SOURCE_NAME `
+          Copy-Item `
+            -Path $source.FullName `
+            -Destination (Join-Path $expertRoot $source.Name) `
+            -Force
+
+          $sourceDirectory = Split-Path `
+            $source.FullName `
+            -Parent
+
+          $dependencies = Get-ChildItem `
+            -Path $sourceDirectory `
+            -Filter "*.mqh" `
             -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue
+
+          foreach ($file in $dependencies) {
+            Copy-Item `
+              -Path $file.FullName `
+              -Destination (Join-Path $expertRoot $file.Name) `
+              -Force
+          }
+
+          Write-Host ""
+          Write-Host "Prepared source files:"
+
+          Get-ChildItem `
+            -Path $expertRoot `
+            -File |
+            ForEach-Object {
+              Write-Host " - $($_.Name)"
+            }
+
+          "KING_BUILD_ROOT=$buildRoot" >> $env:GITHUB_ENV
+          "KING_EXPERT_ROOT=$expert
