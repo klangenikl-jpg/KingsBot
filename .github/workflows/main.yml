@@ -13,211 +13,442 @@ jobs:
   build:
     name: Build King's Bot
     runs-on: windows-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
 
     steps:
+      # ------------------------------------------------------------
+      # 1. SET UP
+      # ------------------------------------------------------------
+      - name: Set up job
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "========================================="
+          Write-Host "KING'S BOT BUILD"
+          Write-Host "========================================="
+          Write-Host "Runner: $env:RUNNER_OS"
+          Write-Host "Architecture: $env:PROCESSOR_ARCHITECTURE"
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+
+      # ------------------------------------------------------------
+      # 2. CHECKOUT
+      # ------------------------------------------------------------
       - name: Checkout King's Bot
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
+      # ------------------------------------------------------------
+      # 3. DOWNLOAD + INSTALL MT5
+      #    NO INDEFINITE WAIT
+      # ------------------------------------------------------------
       - name: Install and locate MetaTrader 5
         shell: pwsh
+        timeout-minutes: 7
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = "Stop"
 
-          Write-Host "========================================"
-          Write-Host "       PREPARING METATRADER 5"
-          Write-Host "========================================"
+          $installer = Join-Path $env:RUNNER_TEMP "mt5setup.exe"
+          $mt5Root = "C:\MT5"
 
-          function Find-MetaEditor {
-            $known = @(
-              "C:\Program Files\MetaTrader 5\metaeditor64.exe",
-              "C:\Program Files (x86)\MetaTrader 5\metaeditor64.exe"
-            )
+          Write-Host "========================================="
+          Write-Host "PREPARING METATRADER 5"
+          Write-Host "========================================="
 
-            foreach ($path in $known) {
-              if (Test-Path $path) {
-                return (Get-Item $path).FullName
-              }
-            }
+          # Clean previous attempt if one exists.
+          if (Test-Path $mt5Root) {
+              Write-Host "Removing previous MT5 directory..."
+              Remove-Item $mt5Root -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
-            foreach ($root in @(
-              "C:\Program Files",
-              "C:\Program Files (x86)"
-            )) {
-              if (-not (Test-Path $root)) {
-                continue
-              }
+          New-Item -ItemType Directory -Path $mt5Root -Force | Out-Null
 
-              $found = Get-ChildItem `
-                -Path $root `
-                -Recurse `
-                -File `
+          # Official MT5 web installer.
+          $mt5Url = "https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe"
+
+          Write-Host "Downloading MT5 installer..."
+          Invoke-WebRequest `
+            -Uri $mt5Url `
+            -OutFile $installer `
+            -UseBasicParsing `
+            -TimeoutSec 120
+
+          if (-not (Test-Path $installer)) {
+              throw "MT5 installer was not downloaded."
+          }
+
+          $size = (Get-Item $installer).Length
+          if ($size -lt 100000) {
+              throw "MT5 installer appears invalid or incomplete. Size: $size bytes"
+          }
+
+          Write-Host "Installer downloaded: $size bytes"
+
+          # Start installer in automatic mode.
+          # IMPORTANT: We do NOT use Start-Process -Wait.
+          Write-Host "Starting MT5 installer..."
+
+          $process = Start-Process `
+            -FilePath $installer `
+            -ArgumentList @(
+              "/auto",
+              "/path:`"$mt5Root`""
+            ) `
+            -PassThru
+
+          $deadline = (Get-Date).AddMinutes(5)
+          $metaEditor = $null
+
+          Write-Host "Waiting for MetaEditor to appear..."
+          Write-Host "Hard installation detection timeout: 5 minutes"
+
+          while ((Get-Date) -lt $deadline) {
+
+              $candidate = Get-ChildItem `
+                -Path $mt5Root `
                 -Filter "metaeditor64.exe" `
+                -File `
+                -Recurse `
                 -ErrorAction SilentlyContinue |
                 Select-Object -First 1
 
-              if ($found) {
-                return $found.FullName
+              if ($candidate) {
+                  $metaEditor = $candidate.FullName
+                  break
               }
-            }
 
-            return $null
-          }
+              # Also check the common direct installation path.
+              $direct = Join-Path $mt5Root "metaeditor64.exe"
 
-          $metaEditor = Find-MetaEditor
+              if (Test-Path $direct) {
+                  $metaEditor = $direct
+                  break
+              }
 
-          if (-not $metaEditor) {
-            $installer = Join-Path $env:RUNNER_TEMP "mt5setup.exe"
-
-            Write-Host "MetaEditor not found."
-            Write-Host "Downloading official MetaTrader 5 installer..."
-
-            Invoke-WebRequest `
-              -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" `
-              -OutFile $installer `
-              -UseBasicParsing
-
-            if (-not (Test-Path $installer)) {
-              throw "MetaTrader 5 installer download failed."
-            }
-
-            Write-Host "Starting MT5 installer."
-            Write-Host "Hard timeout: 180 seconds."
-
-            $installerProcess = Start-Process `
-              -FilePath $installer `
-              -ArgumentList "/auto" `
-              -PassThru
-
-            $finished = $installerProcess.WaitForExit(180000)
-
-            if (-not $finished) {
-              Write-Host "Installer exceeded 180 seconds."
-              Write-Host "Stopping installer instead of hanging the workflow."
-
-              try {
-                Stop-Process `
-                  -Id $installerProcess.Id `
-                  -Force `
-                  -ErrorAction SilentlyContinue
-              } catch {}
-
-              throw "MetaTrader 5 installer timed out after 180 seconds."
-            }
-
-            Write-Host "Installer exit code: $($installerProcess.ExitCode)"
-          }
-
-          Write-Host "Waiting for MetaEditor..."
-
-          for ($i = 1; $i -le 60; $i++) {
-            $metaEditor = Find-MetaEditor
-
-            if ($metaEditor) {
-              break
-            }
-
-            Start-Sleep -Seconds 2
+              Start-Sleep -Seconds 3
           }
 
           if (-not $metaEditor) {
-            Write-Host "MetaEditor64.exe was not found."
+              Write-Host ""
+              Write-Host "MT5 installation did not produce metaeditor64.exe."
+              Write-Host "Stopping installer to prevent an infinite workflow."
+              Write-Host ""
 
-            Get-ChildItem `
-              -Path "C:\Program Files" `
-              -Recurse `
-              -File `
-              -Filter "metaeditor*.exe" `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 20 -ExpandProperty FullName
+              if ($process -and -not $process.HasExited) {
+                  Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+              }
 
-            throw "MetaEditor64.exe is unavailable on the runner."
+              Get-ChildItem $mt5Root -Recurse -ErrorAction SilentlyContinue |
+                Select-Object FullName |
+                Format-Table -AutoSize
+
+              throw "MetaEditor was not found within the installation timeout."
           }
 
           Write-Host ""
-          Write-Host "MetaEditor FOUND:"
-          Write-Host "  $metaEditor"
+          Write-Host "MetaEditor found:"
+          Write-Host $metaEditor
 
-          "KINGSBOT_METAEDITOR=$metaEditor" | Out-File `
-            -FilePath $env:GITHUB_ENV `
-            -Encoding utf8
+          # Allow installer a short opportunity to finish cleanly.
+          if ($process -and -not $process.HasExited) {
+              Write-Host "Allowing installer up to 30 seconds to finish..."
+              $process.WaitForExit(30000) | Out-Null
+          }
 
-      - name: Prepare King's Bot source tree
+          # Never allow the installer to hold the build indefinitely.
+          if ($process -and -not $process.HasExited) {
+              Write-Host "Installer still running. Stopping it after successful installation."
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+
+          if (-not (Test-Path $metaEditor)) {
+              throw "MetaEditor disappeared after installation."
+          }
+
+          # Make MetaEditor available to later steps.
+          $metaEditorDir = Split-Path $metaEditor -Parent
+          "$metaEditorDir" >> $env:GITHUB_PATH
+
+          "METAEDITOR=$metaEditor" >> $env:GITHUB_ENV
+          "MT5_ROOT=$mt5Root" >> $env:GITHUB_ENV
+
+          Write-Host ""
+          Write-Host "MT5 installation verified."
+          Write-Host "METAEDITOR=$metaEditor"
+          Write-Host "MT5_ROOT=$mt5Root"
+
+      # ------------------------------------------------------------
+      # 4. PREPARE KING'S BOT SOURCE
+      # ------------------------------------------------------------
+      - name: Prepare King's Bot source
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "========================================="
+          Write-Host "PREPARING KING'S BOT SOURCE"
+          Write-Host "========================================="
+
+          $workspace = $env:GITHUB_WORKSPACE
+          $mql5Root = Join-Path $env:MT5_ROOT "MQL5"
+          $expertRoot = Join-Path $mql5Root "Experts\KingsBot"
+
+          New-Item -ItemType Directory -Path $expertRoot -Force | Out-Null
+
+          # Locate the Phase 6 integration source.
+          $source = Get-ChildItem `
+            -Path $workspace `
+            -Filter "KingsBot_Phase6_Integration.mq5" `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $source) {
+              Write-Host "Searching repository for MQ5 files..."
+              Get-ChildItem `
+                -Path $workspace `
+                -Filter "*.mq5" `
+                -File `
+                -Recurse |
+                Select-Object FullName |
+                Format-Table -AutoSize
+
+              throw "KingsBot_Phase6_Integration.mq5 was not found."
+          }
+
+          Write-Host "Main source:"
+          Write-Host $source.FullName
+
+          # Copy every MQL5 source file while preserving its repository-relative path.
+          $sourceFiles = Get-ChildItem `
+            -Path $workspace `
+            -Recurse `
+            -File |
+            Where-Object {
+              $_.Extension -in @(".mq5", ".mqh")
+            }
+
+          foreach ($file in $sourceFiles) {
+
+              $relative = $file.FullName.Substring($workspace.Length).TrimStart("\","/")
+
+              $destination = Join-Path $expertRoot $relative
+              $destinationDir = Split-Path $destination -Parent
+
+              New-Item `
+                -ItemType Directory `
+                -Path $destinationDir `
+                -Force |
+                Out-Null
+
+              Copy-Item `
+                -Path $file.FullName `
+                -Destination $destination `
+                -Force
+          }
+
+          $compileSource = Join-Path $expertRoot "KingsBot_Phase6_Integration.mq5"
+
+          if (-not (Test-Path $compileSource)) {
+              throw "Prepared King’s Bot source was not found at $compileSource"
+          }
+
+          "KINGSBOT_SOURCE=$compileSource" >> $env:GITHUB_ENV
+
+          Write-Host ""
+          Write-Host "Prepared source:"
+          Write-Host $compileSource
+
+          Write-Host ""
+          Write-Host "MQL5 files prepared: $($sourceFiles.Count)"
+
+      # ------------------------------------------------------------
+      # 5. COMPILE KING'S BOT
+      # ------------------------------------------------------------
+      - name: Compile King's Bot
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "========================================="
+          Write-Host "COMPILING KING'S BOT"
+          Write-Host "========================================="
+
+          $metaEditor = $env:METAEDITOR
+          $source = $env:KINGSBOT_SOURCE
+
+          if (-not (Test-Path $metaEditor)) {
+              throw "MetaEditor not found: $metaEditor"
+          }
+
+          if (-not (Test-Path $source)) {
+              throw "King's Bot source not found: $source"
+          }
+
+          $sourceDirectory = Split-Path $source -Parent
+          $logFile = Join-Path $sourceDirectory "KingsBot_Phase6_Integration.log"
+          $ex5File = [System.IO.Path]::ChangeExtension(
+              $source,
+              ".ex5"
+          )
+
+          # Remove stale outputs so an old EX5 cannot falsely pass verification.
+          Remove-Item $ex5File -Force -ErrorAction SilentlyContinue
+          Remove-Item $logFile -Force -ErrorAction SilentlyContinue
+
+          Write-Host "MetaEditor:"
+          Write-Host $metaEditor
+
+          Write-Host ""
+          Write-Host "Source:"
+          Write-Host $source
+
+          Write-Host ""
+          Write-Host "Running MetaEditor compiler..."
+
+          $arguments = @(
+              "/compile:`"$source`"",
+              "/log:`"$logFile`""
+          )
+
+          $compileProcess = Start-Process `
+            -FilePath $metaEditor `
+            -ArgumentList $arguments `
+            -PassThru
+
+          # Hard compilation timeout.
+          if (-not $compileProcess.WaitForExit(240000)) {
+
+              Write-Host "Compiler exceeded 4-minute timeout."
+
+              Stop-Process `
+                -Id $compileProcess.Id `
+                -Force `
+                -ErrorAction SilentlyContinue
+
+              throw "King's Bot compilation timed out."
+          }
+
+          Write-Host ""
+          Write-Host "MetaEditor exit code: $($compileProcess.ExitCode)"
+
+          if (Test-Path $logFile) {
+              Write-Host ""
+              Write-Host "========== COMPILATION LOG =========="
+              Get-Content $logFile
+              Write-Host "====================================="
+          }
+          else {
+              Write-Host "WARNING: Compilation log was not generated."
+          }
+
+          # The EX5 itself is the authoritative build result.
+          if (-not (Test-Path $ex5File)) {
+
+              Write-Host ""
+              Write-Host "EX5 was NOT generated."
+
+              if (Test-Path $logFile) {
+                  Write-Host ""
+                  Write-Host "Compilation log:"
+                  Get-Content $logFile
+              }
+
+              throw "King's Bot compilation failed: EX5 artifact was not created."
+          }
+
+          $ex5Size = (Get-Item $ex5File).Length
+
+          if ($ex5Size -le 0) {
+              throw "King's Bot EX5 artifact is empty."
+          }
+
+          Write-Host ""
+          Write-Host "========================================="
+          Write-Host "COMPILATION SUCCESSFUL"
+          Write-Host "========================================="
+          Write-Host "EX5:"
+          Write-Host $ex5File
+          Write-Host "Size: $ex5Size bytes"
+
+          "KINGSBOT_EX5=$ex5File" >> $env:GITHUB_ENV
+          "KINGSBOT_LOG=$logFile" >> $env:GITHUB_ENV
+
+      # ------------------------------------------------------------
+      # 6. VERIFY BUILD ARTIFACT
+      # ------------------------------------------------------------
+      - name: Verify King's Bot EX5 artifact
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = "Stop"
 
-          Write-Host "========================================"
-          Write-Host "       PREPARING KING'S BOT SOURCE"
-          Write-Host "========================================"
+          Write-Host "========================================="
+          Write-Host "VERIFYING EX5 ARTIFACT"
+          Write-Host "========================================="
 
-          $repoRoot = $env:GITHUB_WORKSPACE
-          $buildRoot = Join-Path $env:RUNNER_TEMP "KingsBotBuild"
-          $sourceRoot = Join-Path $buildRoot "MQL5"
-          $expertRoot = Join-Path $sourceRoot "Experts\KingsBot"
-          $includeRoot = Join-Path $sourceRoot "Include"
-
-          if (Test-Path $buildRoot) {
-            Remove-Item `
-              -Path $buildRoot `
-              -Recurse `
-              -Force
+          if (-not (Test-Path $env:KINGSBOT_EX5)) {
+              throw "EX5 artifact does not exist."
           }
 
-          New-Item `
-            -ItemType Directory `
-            -Path $expertRoot `
-            -Force |
-            Out-Null
+          $artifact = Get-Item $env:KINGSBOT_EX5
 
-          New-Item `
-            -ItemType Directory `
-            -Path $includeRoot `
-            -Force |
-            Out-Null
+          Write-Host "Artifact:"
+          Write-Host $artifact.FullName
 
-          $mainCandidates = @(
-            Get-ChildItem `
-              -Path $repoRoot `
-              -Recurse `
-              -File `
-              -Filter "KingsBot_Phase6_Integration.mq5" `
-              -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.FullName -notmatch '\\.git\\' -and
-                $_.FullName -notmatch '\\artifact\\'
-              }
-          )
+          Write-Host ""
+          Write-Host "Size:"
+          Write-Host "$($artifact.Length) bytes"
 
-          if ($mainCandidates.Count -eq 0) {
-            throw "KingsBot_Phase6_Integration.mq5 was not found."
+          if ($artifact.Length -le 0) {
+              throw "EX5 artifact is empty."
           }
 
-          $sourceMain = $mainCandidates[0].FullName
-          $sourceDir = $mainCandidates[0].Directory.FullName
+          Write-Host ""
+          Write-Host "EX5 verification PASSED."
 
-          Write-Host "Repository source:"
-          Write-Host "  $sourceMain"
+      # ------------------------------------------------------------
+      # 7. POST BUILD ARTIFACTS
+      # ------------------------------------------------------------
+      - name: Post King's Bot build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingsBot-Phase6-Build
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ env.KINGSBOT_EX5 }}
+            ${{ env.KINGSBOT_LOG }}
 
-          Copy-Item `
-            -Path (Join-Path $sourceDir "*") `
-            -Destination $expertRoot `
-            -Recurse `
-            -Force
+      # ------------------------------------------------------------
+      # 8. FINAL STATUS
+      # ------------------------------------------------------------
+      - name: Build summary
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "========================================="
+          Write-Host "KING'S BOT BUILD SUMMARY"
+          Write-Host "========================================="
 
-          $includeDirs = @(
-            Get-ChildItem `
-              -Path $repoRoot `
-              -Recurse `
-              -Directory `
-              -Filter "Include" `
-              -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.FullName -notmatch '\\.git\\' -and
-                $_.FullName -notmatch '\\artifact\\'
-              }
-          )
+          if ($env:KINGSBOT_EX5 -and (Test-Path $env:KINGSBOT_EX5)) {
+              Write-Host "EX5 STATUS: SUCCESS"
+              Write-Host "EX5 FILE: $env:KINGSBOT_EX5"
+          }
+          else {
+              Write-Host "EX5 STATUS: NOT GENERATED"
+          }
 
-          foreach ($include
+          if ($env:KINGSBOT_LOG -and (Test-Path $env:KINGSBOT_LOG)) {
+              Write-Host "COMPILE LOG: AVAILABLE"
+          }
+          else {
+              Write-Host "COMPILE LOG: NOT AVAILABLE"
+          }
+
+          Write-Host "========================================="
