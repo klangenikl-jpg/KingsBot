@@ -1,6 +1,3 @@
-#ifndef KB_STRATEGY_SIGNAL_MQH
-#define KB_STRATEGY_SIGNAL_MQH
-
 enum KBSignalDirection
 {
    KB_SIGNAL_NONE = 0,
@@ -29,5 +26,3 @@ struct KBStrategySignal
       reason      = "";
    }
 };
-
-#endif // KB_STRATEGY_SIGNAL_MQH
