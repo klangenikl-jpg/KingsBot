@@ -41,7 +41,7 @@ jobs:
           fetch-depth: 0
 
       # ============================================================
-      # 3. INSTALL METATRADER 5
+      # 3. DOWNLOAD + INSTALL MT5
       # ============================================================
       - name: Install and locate MetaTrader 5
         shell: pwsh
@@ -58,10 +58,18 @@ jobs:
 
           if (Test-Path $mt5Root) {
               Write-Host "Removing previous MT5 directory..."
-              Remove-Item $mt5Root -Recurse -Force -ErrorAction SilentlyContinue
+              Remove-Item `
+                $mt5Root `
+                -Recurse `
+                -Force `
+                -ErrorAction SilentlyContinue
           }
 
-          New-Item -ItemType Directory -Path $mt5Root -Force | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Path $mt5Root `
+            -Force |
+            Out-Null
 
           $mt5Url = "https://download.terminal.free/cdn/web/metaquotes.ltd/mt5/mt5setup.exe"
 
@@ -84,7 +92,6 @@ jobs:
           }
 
           Write-Host "Installer downloaded: $size bytes"
-
           Write-Host "Starting MT5 installer..."
 
           $process = Start-Process `
@@ -98,8 +105,8 @@ jobs:
           $deadline = (Get-Date).AddMinutes(5)
           $metaEditor = $null
 
-          Write-Host "Waiting for MetaEditor..."
-          Write-Host "Installation detection timeout: 5 minutes"
+          Write-Host "Waiting for MetaEditor to appear..."
+          Write-Host "Hard installation detection timeout: 5 minutes"
 
           while ((Get-Date) -lt $deadline) {
 
@@ -116,7 +123,9 @@ jobs:
                   break
               }
 
-              $direct = Join-Path $mt5Root "metaeditor64.exe"
+              $direct = Join-Path `
+                $mt5Root `
+                "metaeditor64.exe"
 
               if (Test-Path $direct) {
                   $metaEditor = $direct
@@ -129,8 +138,8 @@ jobs:
           if (-not $metaEditor) {
 
               Write-Host ""
-              Write-Host "MetaEditor was not found."
-              Write-Host "Stopping installer."
+              Write-Host "MT5 installation did not produce metaeditor64.exe."
+              Write-Host "Stopping installer to prevent an infinite workflow."
 
               if ($process -and -not $process.HasExited) {
                   Stop-Process `
@@ -138,6 +147,13 @@ jobs:
                     -Force `
                     -ErrorAction SilentlyContinue
               }
+
+              Get-ChildItem `
+                $mt5Root `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
+                Select-Object FullName |
+                Format-Table -AutoSize
 
               throw "MetaEditor was not found within the installation timeout."
           }
@@ -152,7 +168,8 @@ jobs:
           }
 
           if ($process -and -not $process.HasExited) {
-              Write-Host "Stopping installer after successful installation."
+              Write-Host "Installer still running. Stopping it after successful installation."
+
               Stop-Process `
                 -Id $process.Id `
                 -Force `
@@ -163,7 +180,9 @@ jobs:
               throw "MetaEditor disappeared after installation."
           }
 
-          $metaEditorDir = Split-Path $metaEditor -Parent
+          $metaEditorDir = Split-Path `
+            $metaEditor `
+            -Parent
 
           "$metaEditorDir" >> $env:GITHUB_PATH
           "METAEDITOR=$metaEditor" >> $env:GITHUB_ENV
@@ -176,6 +195,7 @@ jobs:
 
       # ============================================================
       # 4. PREPARE KING'S BOT SOURCE
+      #    INCLUDING MQL5 INCLUDE-GUARD REPAIR
       # ============================================================
       - name: Prepare King's Bot source
         shell: pwsh
@@ -188,8 +208,13 @@ jobs:
           Write-Host "========================================="
 
           $workspace = $env:GITHUB_WORKSPACE
-          $mql5Root = Join-Path $env:MT5_ROOT "MQL5"
-          $expertRoot = Join-Path $mql5Root "Experts\KingsBot"
+          $mql5Root = Join-Path `
+            $env:MT5_ROOT `
+            "MQL5"
+
+          $expertRoot = Join-Path `
+            $mql5Root `
+            "Experts\KingsBot"
 
           New-Item `
             -ItemType Directory `
@@ -197,6 +222,9 @@ jobs:
             -Force |
             Out-Null
 
+          # --------------------------------------------------------
+          # Locate main Phase 6 source
+          # --------------------------------------------------------
           $source = Get-ChildItem `
             -Path $workspace `
             -Filter "KingsBot_Phase6_Integration.mq5" `
@@ -208,8 +236,6 @@ jobs:
           if (-not $source) {
 
               Write-Host "KingsBot_Phase6_Integration.mq5 was not found."
-
-              Write-Host "Repository MQ5 files:"
 
               Get-ChildItem `
                 -Path $workspace `
@@ -226,20 +252,42 @@ jobs:
           Write-Host "Main source:"
           Write-Host $source.FullName
 
-          $sourceFiles = Get-ChildItem `
-            -Path $workspace `
-            -Recurse `
-            -File |
-            Where-Object {
-              $_.Extension -in @(".mq5", ".mqh")
-            }
+          # --------------------------------------------------------
+          # Find all MQL5 source files
+          # --------------------------------------------------------
+          $sourceFiles = @(
+              Get-ChildItem `
+                -Path $workspace `
+                -Recurse `
+                -File `
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.Extension -in @(".mq5", ".mqh")
+                }
+          )
 
+          if ($sourceFiles.Count -eq 0) {
+              throw "No MQL5 source files were found."
+          }
+
+          $convertedCount = 0
+
+          # --------------------------------------------------------
+          # Copy source files and repair unsupported #pragma once
+          # --------------------------------------------------------
           foreach ($file in $sourceFiles) {
 
-              $relative = $file.FullName.Substring($workspace.Length).TrimStart("\","/")
+              $relative = $file.FullName.Substring(
+                  $workspace.Length
+              ).TrimStart("\","/")
 
-              $destination = Join-Path $expertRoot $relative
-              $destinationDir = Split-Path $destination -Parent
+              $destination = Join-Path `
+                $expertRoot `
+                $relative
+
+              $destinationDir = Split-Path `
+                $destination `
+                -Parent
 
               New-Item `
                 -ItemType Directory `
@@ -248,27 +296,118 @@ jobs:
                 Out-Null
 
               Copy-Item `
-                -Path $file.FullName `
+                -LiteralPath $file.FullName `
                 -Destination $destination `
                 -Force
+
+              if ($file.Extension -eq ".mqh") {
+
+                  $text = Get-Content `
+                    -LiteralPath $destination `
+                    -Raw `
+                    -ErrorAction Stop
+
+                  if ($text -match '(?im)^\s*#pragma\s+once\s*$') {
+
+                      $guard = $relative `
+                        -replace '[^A-Za-z0-9]', '_' `
+                        -replace '_+', '_'
+
+                      $guard = "KINGSBOT_GUARD_$guard".ToUpperInvariant()
+
+                      $pattern = '(?im)^\s*#pragma\s+once\s*\r?\n?'
+
+                      $replacement = @"
+#ifndef $guard
+#define $guard
+
+"@
+
+                      $text = [regex]::Replace(
+                          $text,
+                          $pattern,
+                          $replacement,
+                          1
+                      )
+
+                      $text = $text.TrimEnd() `
+                        + "`r`n`r`n#endif // $guard`r`n"
+
+                      Set-Content `
+                        -LiteralPath $destination `
+                        -Value $text `
+                        -Encoding UTF8 `
+                        -NoNewline
+
+                      $convertedCount++
+
+                      Write-Host "Converted #pragma once:"
+                      Write-Host "  $relative"
+                      Write-Host "  Guard: $guard"
+                  }
+              }
           }
 
+          # --------------------------------------------------------
+          # Verify main source exists
+          # --------------------------------------------------------
           $compileSource = Join-Path `
             $expertRoot `
             "KingsBot_Phase6_Integration.mq5"
 
           if (-not (Test-Path $compileSource)) {
-              throw "Prepared source was not found at $compileSource"
+              throw "Prepared King's Bot source was not found at $compileSource"
           }
 
+          # --------------------------------------------------------
+          # Verify no #pragma once remains
+          # --------------------------------------------------------
+          $remainingPragma = @(
+              Get-ChildItem `
+                -Path $expertRoot `
+                -Recurse `
+                -File `
+                -Filter "*.mqh" `
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+
+                  $content = Get-Content `
+                    -LiteralPath $_.FullName `
+                    -Raw `
+                    -ErrorAction SilentlyContinue
+
+                  $content -match '(?im)^\s*#pragma\s+once\s*$'
+                }
+          )
+
+          if ($remainingPragma.Count -gt 0) {
+
+              Write-Host ""
+              Write-Host "Remaining #pragma once directives:"
+
+              $remainingPragma |
+                Select-Object FullName |
+                Format-Table -AutoSize
+
+              throw "Unsupported #pragma once directive remains in prepared source."
+          }
+
+          # --------------------------------------------------------
+          # Export paths
+          # --------------------------------------------------------
           "KINGSBOT_SOURCE=$compileSource" >> $env:GITHUB_ENV
 
           Write-Host ""
+          Write-Host "========================================="
+          Write-Host "SOURCE PREPARATION COMPLETE"
+          Write-Host "========================================="
           Write-Host "Prepared source:"
           Write-Host $compileSource
-
           Write-Host ""
           Write-Host "MQL5 files prepared: $($sourceFiles.Count)"
+          Write-Host "#pragma once converted: $convertedCount"
+          Write-Host "Unsupported #pragma once remaining: 0"
+          Write-Host "========================================="
 
       # ============================================================
       # 5. COMPILE KING'S BOT
@@ -294,7 +433,9 @@ jobs:
               throw "King's Bot source not found: $source"
           }
 
-          $sourceDirectory = Split-Path $source -Parent
+          $sourceDirectory = Split-Path `
+            $source `
+            -Parent
 
           $logFile = Join-Path `
             $sourceDirectory `
@@ -305,6 +446,7 @@ jobs:
               ".ex5"
           )
 
+          # Remove stale outputs.
           Remove-Item `
             $ex5File `
             -Force `
@@ -335,9 +477,7 @@ jobs:
             -ArgumentList $arguments `
             -PassThru
 
-          $completed = $compileProcess.WaitForExit(240000)
-
-          if (-not $completed) {
+          if (-not $compileProcess.WaitForExit(240000)) {
 
               Write-Host "Compiler exceeded 4-minute timeout."
 
@@ -356,15 +496,16 @@ jobs:
 
               Write-Host ""
               Write-Host "========== COMPILATION LOG =========="
-
               Get-Content $logFile
-
               Write-Host "====================================="
           }
           else {
               Write-Host "WARNING: Compilation log was not generated."
           }
 
+          # --------------------------------------------------------
+          # EX5 is authoritative
+          # --------------------------------------------------------
           if (-not (Test-Path $ex5File)) {
 
               Write-Host ""
@@ -374,7 +515,6 @@ jobs:
 
                   Write-Host ""
                   Write-Host "Compilation log:"
-
                   Get-Content $logFile
               }
 
@@ -391,17 +531,15 @@ jobs:
           Write-Host "========================================="
           Write-Host "COMPILATION SUCCESSFUL"
           Write-Host "========================================="
-
           Write-Host "EX5:"
           Write-Host $ex5File
-
           Write-Host "Size: $ex5Size bytes"
 
           "KINGSBOT_EX5=$ex5File" >> $env:GITHUB_ENV
           "KINGSBOT_LOG=$logFile" >> $env:GITHUB_ENV
 
       # ============================================================
-      # 6. VERIFY EX5
+      # 6. VERIFY BUILD ARTIFACT
       # ============================================================
       - name: Verify King's Bot EX5 artifact
         shell: pwsh
@@ -411,10 +549,6 @@ jobs:
           Write-Host "========================================="
           Write-Host "VERIFYING EX5 ARTIFACT"
           Write-Host "========================================="
-
-          if (-not $env:KINGSBOT_EX5) {
-              throw "KINGSBOT_EX5 environment variable is missing."
-          }
 
           if (-not (Test-Path $env:KINGSBOT_EX5)) {
               throw "EX5 artifact does not exist."
@@ -437,7 +571,7 @@ jobs:
           Write-Host "EX5 verification PASSED."
 
       # ============================================================
-      # 7. UPLOAD BUILD ARTIFACTS
+      # 7. POST BUILD ARTIFACTS
       # ============================================================
       - name: Post King's Bot build artifacts
         if: always()
@@ -451,7 +585,7 @@ jobs:
             ${{ env.KINGSBOT_LOG }}
 
       # ============================================================
-      # 8. BUILD SUMMARY
+      # 8. FINAL STATUS
       # ============================================================
       - name: Build summary
         if: always()
