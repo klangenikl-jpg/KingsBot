@@ -1,10 +1,10 @@
 name: Build King's Bot
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,100 +15,61 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Set up job
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Write-Host "========================================="
-          Write-Host "KING'S BOT BUILD"
-          Write-Host "========================================="
-          Write-Host "Runner: $env:RUNNER_OS"
-          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
-
       - name: Checkout King's Bot
         uses: actions/checkout@v4
 
-      - name: Locate or install MetaEditor
+      - name: Prepare MT5 compiler
         shell: pwsh
+        timeout-minutes: 5
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = "Stop"
 
           Write-Host "========================================="
-          Write-Host "LOCATING METATRADER 5 / METAEDITOR"
+          Write-Host "PREPARING MT5 COMPILER"
           Write-Host "========================================="
 
-          $candidates = @(
-            "C:\Program Files\MetaTrader 5\MetaEditor64.exe",
-            "C:\Program Files (x86)\MetaTrader 5\MetaEditor64.exe",
-            "$env:RUNNER_TEMP\MetaTrader5\MetaEditor64.exe",
-            "$env:RUNNER_TEMP\KingsBot-MT5\MetaEditor64.exe",
-            "$env:RUNNER_TEMP\MetaEditor64.exe"
-          )
-
-          $metaEditor = $null
-
-          foreach ($candidate in $candidates) {
-            if (Test-Path -LiteralPath $candidate) {
-              $metaEditor = (Resolve-Path -LiteralPath $candidate).Path
-              break
-            }
-          }
+          $metaEditor = Get-ChildItem `
+            -Path "C:\Program Files","C:\Program Files (x86)" `
+            -Filter "MetaEditor64.exe" `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
           if (-not $metaEditor) {
-            Write-Host "MetaEditor not found in standard locations."
-            Write-Host "Searching runner drives..."
-
-            $found = Get-ChildItem `
-              -Path "C:\","D:\" `
-              -Filter "MetaEditor64.exe" `
-              -File `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-
-            if ($found) {
-              $metaEditor = $found.FullName
-            }
+            throw "MetaEditor64.exe was not found on the runner."
           }
 
-          if (-not $metaEditor) {
-            throw "MetaEditor64.exe was not found on the GitHub runner."
-          }
+          Write-Host "MetaEditor:"
+          Write-Host $metaEditor.FullName
 
-          Write-Host "MetaEditor found:"
-          Write-Host $metaEditor
-
-          "METAEDITOR=$metaEditor" | Out-File `
-            -FilePath $env:GITHUB_ENV `
-            -Encoding utf8 `
-            -Append
-
-          Write-Host ""
-          Write-Host "MetaEditor version:"
-          & $metaEditor /? 2>&1 |
-            Select-Object -First 10
+          "METAEDITOR_PATH=$($metaEditor.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
       - name: Prepare King's Bot source
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $ErrorActionPreference = "Stop"
 
           Write-Host "========================================="
           Write-Host "PREPARING KING'S BOT SOURCE"
           Write-Host "========================================="
 
-          $source = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Filter "KingsBot_Phase6_Integration.mq5" `
-            -File `
-            -Recurse |
-            Select-Object -First 1
-
-          if (-not $source) {
-            throw "KingsBot_Phase6_Integration.mq5 was not found."
-          }
-
+          $workspace = $env:GITHUB_WORKSPACE
           $buildRoot = Join-Path $env:RUNNER_TEMP "KingsBot-MQL5"
-          $expertsRoot = Join-Path $buildRoot "Experts"
-          $expertRoot = Join-Path $expertsRoot "KingsBot"
-          $includeRoot = Join-Path $buildRoot "
+          $includeRoot = Join-Path $buildRoot "Include"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $buildRoot `
+            -Force |
+            Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Path $includeRoot `
+            -Force |
+           
