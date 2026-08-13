@@ -8,7 +8,6 @@
 #include "KingsBot_Strategy_FVG.mqh"
 #include "KingsBot_DecisionEngine.mqh"
 #include "KingsBot_RiskManager.mqh"
-#include <Trade/Trade.mqh>
 
 input ulong InpMagic = 260610;
 input int InpDeviationPoints = 20;
@@ -25,8 +24,6 @@ CKingsBotOrderBlockStrategy g_orderblock;
 CKingsBotFVGStrategy        g_fvg;
 CKingsBotDecisionEngine     g_decision;
 CKingsBotRiskManager        g_risk;
-
-CTrade g_trade;
 
 datetime g_last_bar = 0;
 double   g_day_start_equity = 0.0;
@@ -76,19 +73,173 @@ void RefreshDailyEquityBaseline()
 }
 
 
+bool ExecuteBuy(
+   const double volume,
+   const double stop_loss,
+   const double take_profit
+)
+{
+   MqlTradeRequest request;
+   MqlTradeResult  result;
+
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.action =
+      TRADE_ACTION_DEAL;
+
+   request.symbol =
+      _Symbol;
+
+   request.volume =
+      volume;
+
+   request.type =
+      ORDER_TYPE_BUY;
+
+   request.price =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_ASK
+      );
+
+   request.sl =
+      stop_loss;
+
+   request.tp =
+      take_profit;
+
+   request.deviation =
+      InpDeviationPoints;
+
+   request.magic =
+      InpMagic;
+
+   request.comment =
+      "KingsBot Phase6 BUY";
+
+   request.type_filling =
+      ORDER_FILLING_FOK;
+
+   if(!OrderSend(
+      request,
+      result
+   ))
+   {
+      Print(
+         "KingsBot BUY failed. Error=",
+         GetLastError()
+      );
+
+      return false;
+   }
+
+   if(
+      result.retcode != TRADE_RETCODE_DONE &&
+      result.retcode != TRADE_RETCODE_PLACED &&
+      result.retcode != TRADE_RETCODE_DONE_PARTIAL
+   )
+   {
+      Print(
+         "KingsBot BUY rejected. Retcode=",
+         result.retcode,
+         " Comment=",
+         result.comment
+      );
+
+      return false;
+   }
+
+   return true;
+}
+
+
+bool ExecuteSell(
+   const double volume,
+   const double stop_loss,
+   const double take_profit
+)
+{
+   MqlTradeRequest request;
+   MqlTradeResult  result;
+
+   ZeroMemory(request);
+   ZeroMemory(result);
+
+   request.action =
+      TRADE_ACTION_DEAL;
+
+   request.symbol =
+      _Symbol;
+
+   request.volume =
+      volume;
+
+   request.type =
+      ORDER_TYPE_SELL;
+
+   request.price =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_BID
+      );
+
+   request.sl =
+      stop_loss;
+
+   request.tp =
+      take_profit;
+
+   request.deviation =
+      InpDeviationPoints;
+
+   request.magic =
+      InpMagic;
+
+   request.comment =
+      "KingsBot Phase6 SELL";
+
+   request.type_filling =
+      ORDER_FILLING_FOK;
+
+   if(!OrderSend(
+      request,
+      result
+   ))
+   {
+      Print(
+         "KingsBot SELL failed. Error=",
+         GetLastError()
+      );
+
+      return false;
+   }
+
+   if(
+      result.retcode != TRADE_RETCODE_DONE &&
+      result.retcode != TRADE_RETCODE_PLACED &&
+      result.retcode != TRADE_RETCODE_DONE_PARTIAL
+   )
+   {
+      Print(
+         "KingsBot SELL rejected. Retcode=",
+         result.retcode,
+         " Comment=",
+         result.comment
+      );
+
+      return false;
+   }
+
+   return true;
+}
+
+
 int OnInit()
 {
    g_risk.Configure(
       InpDailyLossPct,
       InpMaxPositions
-   );
-
-   g_trade.SetExpertMagicNumber(
-      InpMagic
-   );
-
-   g_trade.SetDeviationInPoints(
-      InpDeviationPoints
    );
 
    g_day_start_equity =
@@ -103,7 +254,9 @@ int OnInit()
       now
    );
 
-   g_day_of_year = now.day_of_year;
+   g_day_of_year =
+      now.day_of_year;
+
    g_last_bar = 0;
 
    return INIT_SUCCEEDED;
@@ -112,11 +265,12 @@ int OnInit()
 
 void OnTick()
 {
-   datetime bar = iTime(
-      _Symbol,
-      InpTimeframe,
-      0
-   );
+   datetime bar =
+      iTime(
+         _Symbol,
+         InpTimeframe,
+         0
+      );
 
    if(bar == 0)
    {
@@ -164,6 +318,7 @@ void OnTick()
 
 
    KBStrategySignal signals[5];
+
    int signal_count = 0;
 
    KBStrategySignal signal;
@@ -177,7 +332,9 @@ void OnTick()
       signal
    ))
    {
-      signals[signal_count] = signal;
+      signals[signal_count] =
+         signal;
+
       signal_count++;
    }
 
@@ -190,7 +347,9 @@ void OnTick()
       signal
    ))
    {
-      signals[signal_count] = signal;
+      signals[signal_count] =
+         signal;
+
       signal_count++;
    }
 
@@ -203,7 +362,9 @@ void OnTick()
       signal
    ))
    {
-      signals[signal_count] = signal;
+      signals[signal_count] =
+         signal;
+
       signal_count++;
    }
 
@@ -216,7 +377,9 @@ void OnTick()
       signal
    ))
    {
-      signals[signal_count] = signal;
+      signals[signal_count] =
+         signal;
+
       signal_count++;
    }
 
@@ -229,7 +392,9 @@ void OnTick()
       signal
    ))
    {
-      signals[signal_count] = signal;
+      signals[signal_count] =
+         signal;
+
       signal_count++;
    }
 
@@ -286,17 +451,26 @@ void OnTick()
       return;
    }
 
-   if(bid <= 0.0 || ask <= 0.0)
+   if(
+      bid <= 0.0 ||
+      ask <= 0.0
+   )
    {
       return;
    }
 
 
-   double sl_dist = 100.0 * point;
-   double tp_dist = 200.0 * point;
+   double sl_dist =
+      100.0 * point;
+
+   double tp_dist =
+      200.0 * point;
 
 
-   if(decision.direction == KB_SIGNAL_BUY)
+   if(
+      decision.direction ==
+      KB_SIGNAL_BUY
+   )
    {
       double stop_loss =
          NormalizeDouble(
@@ -310,33 +484,20 @@ void OnTick()
             digits
          );
 
-
-      bool executed =
-         g_trade.Buy(
-            InpLots,
-            _Symbol,
-            0.0,
-            stop_loss,
-            take_profit,
-            "KingsBot Phase6 BUY"
-         );
-
-
-      if(!executed)
-      {
-         Print(
-            "KingsBot BUY execution failed. Retcode=",
-            g_trade.ResultRetcode(),
-            " Description=",
-            g_trade.ResultRetcodeDescription()
-         );
-      }
+      ExecuteBuy(
+         InpLots,
+         stop_loss,
+         take_profit
+      );
 
       return;
    }
 
 
-   if(decision.direction == KB_SIGNAL_SELL)
+   if(
+      decision.direction ==
+      KB_SIGNAL_SELL
+   )
    {
       double stop_loss =
          NormalizeDouble(
@@ -350,27 +511,11 @@ void OnTick()
             digits
          );
 
-
-      bool executed =
-         g_trade.Sell(
-            InpLots,
-            _Symbol,
-            0.0,
-            stop_loss,
-            take_profit,
-            "KingsBot Phase6 SELL"
-         );
-
-
-      if(!executed)
-      {
-         Print(
-            "KingsBot SELL execution failed. Retcode=",
-            g_trade.ResultRetcode(),
-            " Description=",
-            g_trade.ResultRetcodeDescription()
-         );
-      }
+      ExecuteSell(
+         InpLots,
+         stop_loss,
+         take_profit
+      );
 
       return;
    }
