@@ -1,7 +1,6 @@
 #property strict
 
 #include "KB_StrategySignal.mqh"
-
 #include "KingsBot_Strategy_Swing.mqh"
 #include "KingsBot_Strategy_Structure.mqh"
 #include "KingsBot_Strategy_Liquidity.mqh"
@@ -21,15 +20,15 @@ input double InpLots = 0.01;
 input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M15;
 
 
-CKingsBotSwingStrategy       g_swing;
-CKingsBotStructureStrategy   g_structure;
-CKingsBotLiquidityStrategy   g_liquidity;
-CKingsBotOrderBlockStrategy  g_orderblock;
-CKingsBotFVGStrategy         g_fvg;
+CKingsBotSwingStrategy      g_swing;
+CKingsBotStructureStrategy  g_structure;
+CKingsBotLiquidityStrategy  g_liquidity;
+CKingsBotOrderBlockStrategy g_orderblock;
+CKingsBotFVGStrategy        g_fvg;
 
-CKingsBotDecisionEngine      g_decision;
-CKingsBotRiskManager         g_risk;
-CKingsBotExecutionManager    g_execution;
+CKingsBotDecisionEngine     g_decision;
+CKingsBotRiskManager        g_risk;
+CKingsBotExecutionManager   g_execution;
 
 
 datetime g_last_bar = 0;
@@ -63,9 +62,7 @@ int OnInit()
       InpMaxSpreadPoints
    );
 
-   g_day_start_equity = AccountInfoDouble(
-      ACCOUNT_EQUITY
-   );
+   g_day_start_equity = AccountInfoDouble(ACCOUNT_EQUITY);
 
    MqlDateTime now;
    TimeToStruct(TimeCurrent(), now);
@@ -120,7 +117,7 @@ void OnTick()
 
 
    KBStrategySignal signals[5];
-   int count = 0;
+   int signal_count = 0;
 
    KBStrategySignal signal;
 
@@ -133,8 +130,8 @@ void OnTick()
       signal
    ))
    {
-      signals[count] = signal;
-      count++;
+      signals[signal_count] = signal;
+      signal_count++;
    }
 
 
@@ -146,8 +143,8 @@ void OnTick()
       signal
    ))
    {
-      signals[count] = signal;
-      count++;
+      signals[signal_count] = signal;
+      signal_count++;
    }
 
 
@@ -159,8 +156,8 @@ void OnTick()
       signal
    ))
    {
-      signals[count] = signal;
-      count++;
+      signals[signal_count] = signal;
+      signal_count++;
    }
 
 
@@ -172,8 +169,8 @@ void OnTick()
       signal
    ))
    {
-      signals[count] = signal;
-      count++;
+      signals[signal_count] = signal;
+      signal_count++;
    }
 
 
@@ -185,12 +182,12 @@ void OnTick()
       signal
    ))
    {
-      signals[count] = signal;
-      count++;
+      signals[signal_count] = signal;
+      signal_count++;
    }
 
 
-   if(count <= 0)
+   if(signal_count <= 0)
       return;
 
 
@@ -200,7 +197,7 @@ void OnTick()
 
    if(!g_decision.BuildDecision(
       signals,
-      count,
+      signal_count,
       decision,
       0.55
    ))
@@ -235,4 +232,74 @@ void OnTick()
       return;
 
 
-  
+   double sl_dist = 100.0 * point;
+   double tp_dist = 200.0 * point;
+
+
+   if(decision.direction == KB_SIGNAL_BUY)
+   {
+      double stop_loss = NormalizeDouble(
+         ask - sl_dist,
+         digits
+      );
+
+      double take_profit = NormalizeDouble(
+         ask + tp_dist,
+         digits
+      );
+
+
+      bool executed = g_execution.Buy(
+         _Symbol,
+         InpLots,
+         stop_loss,
+         take_profit,
+         "KingsBot Phase6 BUY"
+      );
+
+
+      if(!executed)
+      {
+         Print(
+            "KingsBot BUY execution failed. Error=",
+            GetLastError()
+         );
+      }
+
+      return;
+   }
+
+
+   if(decision.direction == KB_SIGNAL_SELL)
+   {
+      double stop_loss = NormalizeDouble(
+         bid + sl_dist,
+         digits
+      );
+
+      double take_profit = NormalizeDouble(
+         bid - tp_dist,
+         digits
+      );
+
+
+      bool executed = g_execution.Sell(
+         _Symbol,
+         InpLots,
+         stop_loss,
+         take_profit,
+         "KingsBot Phase6 SELL"
+      );
+
+
+      if(!executed)
+      {
+         Print(
+            "KingsBot SELL execution failed. Error=",
+            GetLastError()
+         );
+      }
+
+      return;
+   }
+}
