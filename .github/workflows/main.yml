@@ -1,170 +1,215 @@
-name: King's Bot - Phase 6 Build
+name: Build King's Bot
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
+  compile:
+    name: Compile King's Bot
     runs-on: windows-latest
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout repository
+      - name: Checkout King's Bot
         uses: actions/checkout@v4
 
+      - name: Download MetaTrader 5 installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          $url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $installer
+
+          if (-not (Test-Path $installer)) {
+            throw "MetaTrader 5 installer was not downloaded."
+          }
+
       - name: Install MetaTrader 5
-        shell: powershell
+        shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = 'Stop'
 
-          # Keep the existing installation logic here.
-          # The runner must provide MetaEditor64.exe.
-          if (-not $env:METAEDITOR) {
-            Write-Host "METAEDITOR environment variable is not set."
-            exit 1
-          }
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
-          Write-Host "MetaEditor: $env:METAEDITOR"
+          $process = Start-Process `
+            -FilePath $installer `
+            -ArgumentList '/auto' `
+            -Wait `
+            -PassThru
 
-      - name: Prepare MQL5 source tree
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
+          Write-Host "Installer exit code: $($process.ExitCode)"
 
-          $sourceRoot = Join-Path $env:GITHUB_WORKSPACE "MQL5"
+          $searchRoots = @(
+            $env:RUNNER_TEMP,
+            $env:LOCALAPPDATA,
+            'C:\Program Files',
+            'C:\Program Files (x86)'
+          )
 
-          if (-not (Test-Path $sourceRoot)) {
-            New-Item `
-              -ItemType Directory `
-              -Path $sourceRoot `
-              -Force | Out-Null
-          }
+          $metaEditor = $null
 
-          "SOURCE_ROOT=$sourceRoot" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Encoding utf8 `
-              -Append
-
-      - name: Normalize MQL5 headers
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $headers = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Recurse `
-            -File `
-            -Filter "*.mqh"
-
-          foreach ($file in $headers) {
-            Write-Host "Checking: $($file.Name)"
-
-            $content = Get-Content `
-              -Path $file.FullName `
-              -Raw
-
-            if ($null -eq $content) {
+          foreach ($root in $searchRoots) {
+            if (-not (Test-Path $root)) {
               continue
             }
 
-            $content = $content.Replace(
-              "`r`n",
-              "`n"
-            )
+            $found = Get-ChildItem `
+              -Path $root `
+              -Filter 'MetaEditor64.exe' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
 
-            $content = $content.Replace(
-              "`r",
-              "`n"
-            )
-
-            [System.IO.File]::WriteAllText(
-              $file.FullName,
-              $content,
-              [System.Text.UTF8Encoding]::new($false)
-            )
+            if ($found) {
+              $metaEditor = $found
+              break
+            }
           }
 
-          Write-Host "All MQL5 headers passed normalization check."
+          if (-not $metaEditor) {
+            throw "MetaEditor64.exe was not found."
+          }
+
+          Write-Host "MetaEditor: $($metaEditor.FullName)"
+
+          "METAEDITOR=$($metaEditor.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+      - name: Locate King's Bot source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $source = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter 'KingsBot_Phase6_Integration.mq5' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $source) {
+            throw "KingsBot_Phase6_Integration.mq5 was not found."
+          }
+
+          Write-Host "Source: $($source.FullName)"
+
+          "SOURCE=$($source.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
       - name: Compile King's Bot
-        shell: powershell
+        shell: pwsh
         run: |
-          $ErrorActionPreference = "Continue"
+          $ErrorActionPreference = 'Stop'
 
-          $project = Join-Path `
-            $env:SOURCE_ROOT `
-            "Experts\KingsBot\KingsBot_Phase6_Integration.mq5"
+          $sourceDirectory = Split-Path -Parent $env:SOURCE
 
-          Write-Host "=========================================="
-          Write-Host "COMPILING KINGSBOT PHASE 6"
-          Write-Host "=========================================="
-          Write-Host "Source: $project"
-          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "COMPILING KING'S BOT"
+          Write-Host "========================================"
+          Write-Host "Source: $env:SOURCE"
+          Write-Host "MetaEditor: $env:METAEDITOR"
 
-          if (-not (Test-Path $project)) {
-            Write-Host "ERROR: Integration file not found."
-            exit 1
-          }
+          $process = Start-Process `
+            -FilePath $env:METAEDITOR `
+            -ArgumentList @(
+              "/compile:`"$($env:SOURCE)`"",
+              '/log'
+            ) `
+            -WorkingDirectory $sourceDirectory `
+            -Wait `
+            -PassThru
 
-          & $env:METAEDITOR `
-            "/compile:$project" `
-            "/log"
+          Write-Host "MetaEditor exit code: $($process.ExitCode)"
 
-          $exitCode = $LASTEXITCODE
+          Start-Sleep -Seconds 3
 
-          Write-Host ""
-          Write-Host "=========================================="
-          Write-Host "METAEDITOR EXIT CODE: $exitCode"
-          Write-Host "=========================================="
-
-          Write-Host ""
-          Write-Host "===== COMPILER OUTPUT ====="
-
-          $logFiles = Get-ChildItem `
-            -Path $env:SOURCE_ROOT `
-            -Recurse `
-            -File `
-            -Include "*.log","*.txt" `
-            -ErrorAction SilentlyContinue
-
-          foreach ($log in $logFiles) {
-            Write-Host ""
-            Write-Host "===== $($log.FullName) ====="
-            Get-Content `
-              -Path $log.FullName `
+          $after = @(
+            Get-ChildItem `
+              -Path $env:GITHUB_WORKSPACE `
+              -Filter '*.ex5' `
+              -File `
+              -Recurse `
               -ErrorAction SilentlyContinue
+          )
+
+          if ($after.Count -eq 0) {
+            throw "KingsBot compilation failed. No EX5 file was created."
           }
 
-          Write-Host ""
-          Write-Host "===== EX5 CHECK ====="
+          Write-Host "========================================"
+          Write-Host "EX5 FILE FOUND"
+          Write-Host "========================================"
 
-          $ex5Files = Get-ChildItem `
-            -Path $env:SOURCE_ROOT `
-            -Recurse `
-            -File `
-            -Filter "*.ex5" `
-            -ErrorAction SilentlyContinue
+          $generated = $after |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
 
-          if ($ex5Files.Count -eq 0) {
-            Write-Host "NO EX5 FILE CREATED."
-            exit 1
+          Write-Host $generated.FullName
+
+          "EX5_PATH=$($generated.FullName)" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+      - name: Prepare King's Bot artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $artifactDirectory = Join-Path `
+            $env:RUNNER_TEMP `
+            'KingsBotArtifact'
+
+          New-Item `
+            -ItemType Directory `
+            -Path $artifactDirectory `
+            -Force |
+            Out-Null
+
+          $artifactFile = Join-Path `
+            $artifactDirectory `
+            'KingsBot_Phase6_Integration.ex5'
+
+          Copy-Item `
+            -Path $env:EX5_PATH `
+            -Destination $artifactFile `
+            -Force
+
+          if (-not (Test-Path $artifactFile)) {
+            throw "Artifact file was not created."
           }
 
-          foreach ($file in $ex5Files) {
-            Write-Host "EX5 CREATED: $($file.FullName)"
-          }
+          Write-Host "Artifact:"
+          Write-Host $artifactFile
 
-          exit 0
+          "ARTIFACT_FILE=$artifactFile" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
-      - name: Upload build artifact
-        if: always()
+      - name: Upload King's Bot artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KingsBot-Phase6-build
-          path: |
-            ${{ env.SOURCE_ROOT }}/**/*.ex5
-            ${{ env.SOURCE_ROOT }}/**/*.log
-          if-no-files-found: warn
+          name: KingsBot-Phase6
+          path: ${{ env.ARTIFACT_FILE }}
+          if-no-files-found: error
