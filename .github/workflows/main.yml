@@ -12,7 +12,7 @@ jobs:
   compile:
     name: Compile King's Bot
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout King's Bot
@@ -35,7 +35,8 @@ jobs:
             throw "MetaTrader 5 installer was not downloaded."
           }
 
-          Write-Host "Installer downloaded: $installer"
+          Write-Host "Installer downloaded:"
+          Write-Host $installer
 
       - name: Install MetaTrader 5
         shell: pwsh
@@ -43,66 +44,71 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
-          $mt5Root = Join-Path $env:RUNNER_TEMP 'MT5'
 
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path $mt5Root |
-            Out-Null
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "INSTALLING METATRADER 5"
+          Write-Host "========================================"
+          Write-Host ""
 
-          Write-Host "Installing MetaTrader 5..."
-          Write-Host "Installation directory: $mt5Root"
+          Write-Host "Using documented unattended installation mode:"
+          Write-Host "/auto"
+          Write-Host ""
 
           $process = Start-Process `
             -FilePath $installer `
-            -ArgumentList @(
-              '/auto',
-              "/path:`"$mt5Root`""
-            ) `
+            -ArgumentList '/auto' `
             -Wait `
             -PassThru
 
+          Write-Host ""
           Write-Host "Installer exit code: $($process.ExitCode)"
 
-          if ($process.ExitCode -ne 0) {
-            throw "MetaTrader 5 installation failed with exit code $($process.ExitCode)."
-          }
-
-      - name: Locate MetaEditor
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $mt5Root = Join-Path $env:RUNNER_TEMP 'MT5'
-
+          Write-Host ""
           Write-Host "Searching for MetaEditor64.exe..."
 
-          $metaEditor = Get-ChildItem `
-            -Path $mt5Root `
-            -Filter 'MetaEditor64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+          $searchRoots = @(
+            $env:RUNNER_TEMP,
+            $env:LOCALAPPDATA,
+            'C:\Program Files',
+            'C:\Program Files (x86)'
+          )
 
-          if (-not $metaEditor) {
-            Write-Host "MetaEditor was not found inside MT5 directory."
-            Write-Host "Searching entire runner temporary directory..."
+          $metaEditor = $null
 
-            $metaEditor = Get-ChildItem `
-              -Path $env:RUNNER_TEMP `
+          foreach ($root in $searchRoots) {
+            if (-not (Test-Path $root)) {
+              continue
+            }
+
+            Write-Host "Searching: $root"
+
+            $found = Get-ChildItem `
+              -Path $root `
               -Filter 'MetaEditor64.exe' `
               -File `
               -Recurse `
               -ErrorAction SilentlyContinue |
               Select-Object -First 1
+
+            if ($found) {
+              $metaEditor = $found
+              break
+            }
           }
 
           if (-not $metaEditor) {
-            throw "MetaEditor64.exe could not be found."
+            Write-Host ""
+            Write-Host "MetaEditor was not found."
+
+            if ($process.ExitCode -ne 0) {
+              throw "MetaTrader 5 installation failed with exit code $($process.ExitCode), and MetaEditor64.exe was not found."
+            }
+
+            throw "Installer returned exit code 0, but MetaEditor64.exe was not found."
           }
 
+          Write-Host ""
           Write-Host "MetaEditor found:"
           Write-Host $metaEditor.FullName
 
@@ -117,6 +123,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
+          Write-Host ""
           Write-Host "Searching for KingsBot_Phase6_Integration.mq5..."
 
           $source = Get-ChildItem `
@@ -146,6 +153,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           Write-Host ""
+          Write-Host "========================================"
           Write-Host "MQL5 SOURCE AND INCLUDE FILES"
           Write-Host "========================================"
 
@@ -188,53 +196,39 @@ jobs:
 
           $before = @(
             Get-ChildItem `
-              -Path $sourceDirectory `
+              -Path $env:GITHUB_WORKSPACE `
               -Filter '*.ex5' `
               -File `
               -Recurse `
               -ErrorAction SilentlyContinue
           )
 
-          Write-Host "Existing EX5 files before compilation:"
-          if ($before.Count -eq 0) {
-            Write-Host "None"
-          }
-          else {
-            $before | ForEach-Object {
-              Write-Host $_.FullName
-            }
-          }
+          Write-Host "EX5 files before compilation: $($before.Count)"
 
           Write-Host ""
-          Write-Host "Starting MetaEditor compilation..."
-
-          $startTime = Get-Date
-
-          $arguments = @(
-            "/compile:`"$($env:SOURCE)`"",
-            "/log"
-          )
+          Write-Host "Starting MetaEditor..."
 
           $process = Start-Process `
             -FilePath $env:METAEDITOR `
-            -ArgumentList $arguments `
+            -ArgumentList @(
+              "/compile:`"$($env:SOURCE)`"",
+              '/log'
+            ) `
             -WorkingDirectory $sourceDirectory `
             -Wait `
             -PassThru
 
-          $exitCode = $process.ExitCode
+          Write-Host ""
+          Write-Host "MetaEditor exit code: $($process.ExitCode)"
+
+          Start-Sleep -Seconds 3
 
           Write-Host ""
-          Write-Host "MetaEditor exit code: $exitCode"
-          Write-Host ""
-
-          Start-Sleep -Seconds 2
-
-          Write-Host "Searching for generated EX5 files..."
+          Write-Host "Searching entire workspace for EX5 files..."
 
           $after = @(
             Get-ChildItem `
-              -Path $sourceDirectory `
+              -Path $env:GITHUB_WORKSPACE `
               -Filter '*.ex5' `
               -File `
               -Recurse `
@@ -249,7 +243,7 @@ jobs:
             }
           }
           else {
-            Write-Host "No EX5 files found in source directory."
+            Write-Host "No EX5 files found in workspace."
           }
 
           Write-Host ""
@@ -262,34 +256,28 @@ jobs:
               -File `
               -Recurse `
               -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.LastWriteTime -ge $startTime.AddMinutes(-1)
-              } |
               Sort-Object LastWriteTime -Descending
           )
 
-          if ($logs.Count -eq 0) {
-            Write-Host "No recent compiler log files were found."
-          }
-          else {
-            foreach ($log in $logs) {
+          if ($logs.Count -gt 0) {
+            foreach ($log in $logs | Select-Object -First 10) {
               Write-Host ""
               Write-Host "========================================"
-              Write-Host "COMPILER LOG: $($log.FullName)"
+              Write-Host "LOG: $($log.FullName)"
               Write-Host "========================================"
-              Get-Content $log.FullName -ErrorAction SilentlyContinue
+
+              Get-Content `
+                $log.FullName `
+                -ErrorAction SilentlyContinue
             }
+          }
+          else {
+            Write-Host "No compiler log files found."
           }
 
           if ($after.Count -eq 0) {
-            Write-Host ""
-            Write-Host "========================================"
-            Write-Host "COMPILATION DID NOT PRODUCE AN EX5 FILE"
-            Write-Host "========================================"
-            Write-Host ""
-
-            if ($exitCode -ne 0) {
-              throw "MetaEditor failed with exit code $exitCode."
+            if ($process.ExitCode -ne 0) {
+              throw "MetaEditor failed with exit code $($process.ExitCode)."
             }
 
             throw "MetaEditor returned exit code 0, but no EX5 file was created. Compiler diagnostics were printed above."
@@ -300,7 +288,9 @@ jobs:
             Select-Object -First 1
 
           Write-Host ""
-          Write-Host "Generated EX5:"
+          Write-Host "========================================"
+          Write-Host "SUCCESS: EX5 GENERATED"
+          Write-Host "========================================"
           Write-Host $generated.FullName
 
           "EX5_PATH=$($generated.FullName)" |
