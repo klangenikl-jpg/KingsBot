@@ -3,12 +3,11 @@
 class CKingsBotDecisionEngine
 {
 public:
-
    bool BuildDecision(
       KBStrategySignal &signals[],
-      const int signal_count,
+      int signal_count,
       KBStrategySignal &decision,
-      const double min_confidence = 0.55
+      double min_confidence = 0.55
    )
    {
       decision.direction   = KB_SIGNAL_NONE;
@@ -19,38 +18,34 @@ public:
       decision.strategy    = "";
       decision.reason      = "";
 
-      int count = ArraySize(signals);
-
-      if(signal_count <= 0 || count <= 0)
+      if(signal_count <= 0)
          return false;
 
-      if(signal_count < count)
-         count = signal_count;
+      double buy_score  = 0.0;
+      double sell_score = 0.0;
 
-      double buy  = 0.0;
-      double sell = 0.0;
-
-      for(int i = 0; i < count; i++)
+      for(int i = 0; i < signal_count; i++)
       {
          if(signals[i].direction == KB_SIGNAL_BUY)
-            buy += signals[i].confidence;
-         else if(signals[i].direction == KB_SIGNAL_SELL)
-            sell += signals[i].confidence;
+            buy_score += signals[i].confidence;
+         else
+         if(signals[i].direction == KB_SIGNAL_SELL)
+            sell_score += signals[i].confidence;
       }
 
-      if(buy >= min_confidence && buy > sell)
+      if(buy_score >= min_confidence && buy_score > sell_score)
       {
          decision.direction  = KB_SIGNAL_BUY;
-         decision.confidence = MathMin(1.0, buy / count);
+         decision.confidence = MathMin(1.0, buy_score / signal_count);
          decision.strategy   = "Decision";
          decision.reason     = "Bullish consensus";
          return true;
       }
 
-      if(sell >= min_confidence && sell > buy)
+      if(sell_score >= min_confidence && sell_score > buy_score)
       {
          decision.direction  = KB_SIGNAL_SELL;
-         decision.confidence = MathMin(1.0, sell / count);
+         decision.confidence = MathMin(1.0, sell_score / signal_count);
          decision.strategy   = "Decision";
          decision.reason     = "Bearish consensus";
          return true;
