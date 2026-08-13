@@ -5,6 +5,7 @@
 class CKingsBotDecisionEngine
 {
 public:
+
    bool BuildDecision(
       KBStrategySignal &signals[],
       const int signal_count,
@@ -14,15 +15,13 @@ public:
    {
       decision.Reset();
 
-      double buy  = 0.0;
+      double buy = 0.0;
       double sell = 0.0;
 
-      int n = signal_count;
-
-      if(n <= 0)
+      if(signal_count <= 0)
          return false;
 
-      for(int i = 0; i < n; i++)
+      for(int i = 0; i < signal_count; i++)
       {
          if(signals[i].direction == KB_SIGNAL_BUY)
             buy += signals[i].confidence;
@@ -33,19 +32,19 @@ public:
 
       if(buy >= min_confidence && buy > sell)
       {
-         decision.direction  = KB_SIGNAL_BUY;
-         decision.confidence = MathMin(1.0, buy / n);
-         decision.strategy   = "Decision";
-         decision.reason     = "Bullish consensus";
+         decision.direction = KB_SIGNAL_BUY;
+         decision.confidence = MathMin(1.0, buy / signal_count);
+         decision.strategy = "Decision";
+         decision.reason = "Bullish consensus";
          return true;
       }
 
       if(sell >= min_confidence && sell > buy)
       {
-         decision.direction  = KB_SIGNAL_SELL;
-         decision.confidence = MathMin(1.0, sell / n);
-         decision.strategy   = "Decision";
-         decision.reason     = "Bearish consensus";
+         decision.direction = KB_SIGNAL_SELL;
+         decision.confidence = MathMin(1.0, sell / signal_count);
+         decision.strategy = "Decision";
+         decision.reason = "Bearish consensus";
          return true;
       }
 
