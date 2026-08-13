@@ -8,8 +8,7 @@
 #include "KingsBot_Strategy_FVG.mqh"
 #include "KingsBot_DecisionEngine.mqh"
 #include "KingsBot_RiskManager.mqh"
-#include "KingsBot_ExecutionManager.mqh"
-
+#include <Trade/Trade.mqh>
 
 input ulong InpMagic = 260610;
 input int InpDeviationPoints = 20;
@@ -19,32 +18,60 @@ input int InpMaxPositions = 1;
 input double InpLots = 0.01;
 input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M15;
 
-
 CKingsBotSwingStrategy      g_swing;
 CKingsBotStructureStrategy  g_structure;
 CKingsBotLiquidityStrategy  g_liquidity;
 CKingsBotOrderBlockStrategy g_orderblock;
 CKingsBotFVGStrategy        g_fvg;
-
 CKingsBotDecisionEngine     g_decision;
 CKingsBotRiskManager        g_risk;
-CKingsBotExecutionManager   g_execution;
 
+CTrade g_trade;
 
 datetime g_last_bar = 0;
 double   g_day_start_equity = 0.0;
 int      g_day_of_year = -1;
 
 
+bool SpreadOK(const string symbol)
+{
+   long spread = 0;
+
+   if(!SymbolInfoInteger(
+      symbol,
+      SYMBOL_SPREAD,
+      spread
+   ))
+   {
+      return false;
+   }
+
+   if(InpMaxSpreadPoints <= 0)
+   {
+      return true;
+   }
+
+   return (spread <= InpMaxSpreadPoints);
+}
+
+
 void RefreshDailyEquityBaseline()
 {
    MqlDateTime now;
-   TimeToStruct(TimeCurrent(), now);
+
+   TimeToStruct(
+      TimeCurrent(),
+      now
+   );
 
    if(now.day_of_year != g_day_of_year)
    {
       g_day_of_year = now.day_of_year;
-      g_day_start_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+
+      g_day_start_equity =
+         AccountInfoDouble(
+            ACCOUNT_EQUITY
+         );
    }
 }
 
@@ -56,16 +83,25 @@ int OnInit()
       InpMaxPositions
    );
 
-   g_execution.Configure(
-      InpMagic,
-      InpDeviationPoints,
-      InpMaxSpreadPoints
+   g_trade.SetExpertMagicNumber(
+      InpMagic
    );
 
-   g_day_start_equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_trade.SetDeviationInPoints(
+      InpDeviationPoints
+   );
+
+   g_day_start_equity =
+      AccountInfoDouble(
+         ACCOUNT_EQUITY
+      );
 
    MqlDateTime now;
-   TimeToStruct(TimeCurrent(), now);
+
+   TimeToStruct(
+      TimeCurrent(),
+      now
+   );
 
    g_day_of_year = now.day_of_year;
    g_last_bar = 0;
@@ -83,37 +119,48 @@ void OnTick()
    );
 
    if(bar == 0)
+   {
       return;
+   }
 
    if(bar == g_last_bar)
+   {
       return;
+   }
 
    g_last_bar = bar;
 
    RefreshDailyEquityBaseline();
 
 
-   double equity = AccountInfoDouble(
-      ACCOUNT_EQUITY
-   );
+   double equity =
+      AccountInfoDouble(
+         ACCOUNT_EQUITY
+      );
 
    if(g_risk.DailyLossLimitReached(
       g_day_start_equity,
       equity
    ))
+   {
       return;
+   }
 
 
    if(!g_risk.CanOpenNewPosition(
       _Symbol
    ))
+   {
       return;
+   }
 
 
-   if(!g_execution.SpreadOK(
+   if(!SpreadOK(
       _Symbol
    ))
+   {
       return;
+   }
 
 
    KBStrategySignal signals[5];
@@ -188,10 +235,13 @@ void OnTick()
 
 
    if(signal_count <= 0)
+   {
       return;
+   }
 
 
    KBStrategySignal decision;
+
    decision.Reset();
 
 
@@ -201,35 +251,45 @@ void OnTick()
       decision,
       0.55
    ))
+   {
       return;
+   }
 
 
-   double point = SymbolInfoDouble(
-      _Symbol,
-      SYMBOL_POINT
-   );
+   double point =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_POINT
+      );
 
-   int digits = (int)SymbolInfoInteger(
-      _Symbol,
-      SYMBOL_DIGITS
-   );
+   int digits =
+      (int)SymbolInfoInteger(
+         _Symbol,
+         SYMBOL_DIGITS
+      );
 
-   double bid = SymbolInfoDouble(
-      _Symbol,
-      SYMBOL_BID
-   );
+   double bid =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_BID
+      );
 
-   double ask = SymbolInfoDouble(
-      _Symbol,
-      SYMBOL_ASK
-   );
+   double ask =
+      SymbolInfoDouble(
+         _Symbol,
+         SYMBOL_ASK
+      );
 
 
    if(point <= 0.0)
+   {
       return;
+   }
 
    if(bid <= 0.0 || ask <= 0.0)
+   {
       return;
+   }
 
 
    double sl_dist = 100.0 * point;
@@ -238,31 +298,37 @@ void OnTick()
 
    if(decision.direction == KB_SIGNAL_BUY)
    {
-      double stop_loss = NormalizeDouble(
-         ask - sl_dist,
-         digits
-      );
+      double stop_loss =
+         NormalizeDouble(
+            ask - sl_dist,
+            digits
+         );
 
-      double take_profit = NormalizeDouble(
-         ask + tp_dist,
-         digits
-      );
+      double take_profit =
+         NormalizeDouble(
+            ask + tp_dist,
+            digits
+         );
 
 
-      bool executed = g_execution.Buy(
-         _Symbol,
-         InpLots,
-         stop_loss,
-         take_profit,
-         "KingsBot Phase6 BUY"
-      );
+      bool executed =
+         g_trade.Buy(
+            InpLots,
+            _Symbol,
+            0.0,
+            stop_loss,
+            take_profit,
+            "KingsBot Phase6 BUY"
+         );
 
 
       if(!executed)
       {
          Print(
-            "KingsBot BUY execution failed. Error=",
-            GetLastError()
+            "KingsBot BUY execution failed. Retcode=",
+            g_trade.ResultRetcode(),
+            " Description=",
+            g_trade.ResultRetcodeDescription()
          );
       }
 
@@ -272,31 +338,37 @@ void OnTick()
 
    if(decision.direction == KB_SIGNAL_SELL)
    {
-      double stop_loss = NormalizeDouble(
-         bid + sl_dist,
-         digits
-      );
+      double stop_loss =
+         NormalizeDouble(
+            bid + sl_dist,
+            digits
+         );
 
-      double take_profit = NormalizeDouble(
-         bid - tp_dist,
-         digits
-      );
+      double take_profit =
+         NormalizeDouble(
+            bid - tp_dist,
+            digits
+         );
 
 
-      bool executed = g_execution.Sell(
-         _Symbol,
-         InpLots,
-         stop_loss,
-         take_profit,
-         "KingsBot Phase6 SELL"
-      );
+      bool executed =
+         g_trade.Sell(
+            InpLots,
+            _Symbol,
+            0.0,
+            stop_loss,
+            take_profit,
+            "KingsBot Phase6 SELL"
+         );
 
 
       if(!executed)
       {
          Print(
-            "KingsBot SELL execution failed. Error=",
-            GetLastError()
+            "KingsBot SELL execution failed. Retcode=",
+            g_trade.ResultRetcode(),
+            " Description=",
+            g_trade.ResultRetcodeDescription()
          );
       }
 
