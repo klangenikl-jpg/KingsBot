@@ -8,7 +8,7 @@ public:
    bool BuildDecision(
       KBStrategySignal &signals[],
       KBStrategySignal &decision,
-      const double min_confidence = 0.55
+      double min_confidence
    )
    {
       decision.Reset();
@@ -17,6 +17,9 @@ public:
       double sell_score = 0.0;
 
       int count = ArraySize(signals);
+
+      if(count <= 0)
+         return false;
 
       for(int i = 0; i < count; i++)
       {
@@ -30,10 +33,11 @@ public:
       if(buy_score >= min_confidence && buy_score > sell_score)
       {
          decision.direction = KB_SIGNAL_BUY;
-         decision.confidence = MathMin(
-            1.0,
-            buy_score / MathMax(1, count)
-         );
+         decision.confidence = buy_score / count;
+
+         if(decision.confidence > 1.0)
+            decision.confidence = 1.0;
+
          decision.strategy = "Decision";
          decision.reason = "Bullish consensus";
 
@@ -43,10 +47,11 @@ public:
       if(sell_score >= min_confidence && sell_score > buy_score)
       {
          decision.direction = KB_SIGNAL_SELL;
-         decision.confidence = MathMin(
-            1.0,
-            sell_score / MathMax(1, count)
-         );
+         decision.confidence = sell_score / count;
+
+         if(decision.confidence > 1.0)
+            decision.confidence = 1.0;
+
          decision.strategy = "Decision";
          decision.reason = "Bearish consensus";
 
