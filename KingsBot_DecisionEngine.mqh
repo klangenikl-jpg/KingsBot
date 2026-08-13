@@ -1,7 +1,5 @@
 #pragma once
 
-#include "KB_StrategySignal.mqh"
-
 class CKingsBotDecisionEngine
 {
 public:
