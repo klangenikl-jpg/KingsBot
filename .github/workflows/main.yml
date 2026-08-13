@@ -19,19 +19,16 @@ jobs:
       - name: Checkout King's Bot
         uses: actions/checkout@v4
 
-      - name: Build King's Bot
+      - name: Install MetaTrader 5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          Write-Host "========================================"
-          Write-Host "BUILD KING'S BOT"
-          Write-Host "========================================"
-
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
           $mt5Root = Join-Path $env:RUNNER_TEMP 'MT5'
 
-          Write-Host "Downloading MetaTrader 5..."
+          Write-Host 'Downloading MetaTrader 5 installer...'
+
           Invoke-WebRequest `
             -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
             -OutFile $installer
@@ -40,32 +37,35 @@ jobs:
             throw 'MetaTrader 5 installer was not downloaded.'
           }
 
-          Write-Host "Installing MetaTrader 5..."
           New-Item `
             -ItemType Directory `
             -Force `
             -Path $mt5Root |
             Out-Null
 
-          $installProcess = Start-Process `
+          Write-Host 'Installing MetaTrader 5...'
+          Write-Host "Install path: $mt5Root"
+
+          $arguments = '/auto /path:"' + $mt5Root + '"'
+
+          Write-Host "Installer arguments: $arguments"
+
+          $process = Start-Process `
             -FilePath $installer `
-            -ArgumentList @(
-              '/auto',
-              "/path:$mt5Root"
-            ) `
+            -ArgumentList $arguments `
             -Wait `
-            -PassThru
+            -PassThru `
+            -NoNewWindow
 
-          Write-Host "Installer exit code: $($installProcess.ExitCode)"
+          Write-Host "Installer exit code: $($process.ExitCode)"
 
-          if ($installProcess.ExitCode -ne 0) {
-            throw "MetaTrader 5 installation failed with exit code $($installProcess.ExitCode)."
+          if ($process.ExitCode -ne 0) {
+            Write-Host 'Installer returned a non-zero exit code.'
+            Write-Host 'Checking whether MetaEditor was nevertheless installed...'
           }
 
-          Write-Host "Locating MetaEditor..."
-
           $metaEditor = Get-ChildItem `
-            -Path $env:RUNNER_TEMP `
+            -Path $mt5Root `
             -Filter 'MetaEditor64.exe' `
             -File `
             -Recurse `
@@ -73,13 +73,30 @@ jobs:
             Select-Object -First 1
 
           if (-not $metaEditor) {
-            throw 'MetaEditor64.exe was not found.'
+            $metaEditor = Get-ChildItem `
+              -Path $env:RUNNER_TEMP `
+              -Filter 'MetaEditor64.exe' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
           }
 
-          Write-Host "MetaEditor found:"
+          if (-not $metaEditor) {
+            throw "MetaEditor64.exe was not found. Installer exit code: $($process.ExitCode)"
+          }
+
+          Write-Host 'MetaEditor found:'
           Write-Host $metaEditor.FullName
 
-          Write-Host "Locating King's Bot source..."
+          "METAEDITOR=$($metaEditor.FullName)" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Encoding utf8
+
+      - name: Locate King's Bot source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
 
           $source = Get-ChildItem `
             -Path $env:GITHUB_WORKSPACE `
@@ -93,10 +110,17 @@ jobs:
             throw 'KingsBot_Phase6_Integration.mq5 was not found.'
           }
 
-          Write-Host "Source found:"
+          Write-Host 'King''s Bot source found:'
           Write-Host $source.FullName
 
-          Write-Host "Locating MQL5 include files..."
+          "SOURCE=$($source.FullName)" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Encoding utf8
+
+      - name: Show MQL5 include files
+        shell: pwsh
+        run: |
+          Write-Host 'MQL5 include files:'
 
           $includes = Get-ChildItem `
             -Path $env:GITHUB_WORKSPACE `
@@ -106,46 +130,59 @@ jobs:
             -ErrorAction SilentlyContinue
 
           if ($includes) {
-            foreach ($include in $includes) {
-              Write-Host $include.FullName
+            $includes | ForEach-Object {
+              Write-Host $_.FullName
             }
           }
+          else {
+            Write-Host 'No MQL5 include files found.'
+          }
 
-          Write-Host "========================================"
-          Write-Host "COMPILING KING'S BOT"
-          Write-Host "========================================"
+      - name: Compile King's Bot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
 
-          $compileArguments = @(
-            "/compile:$($source.FullName)",
-            '/log'
-          )
+          Write-Host '========================================'
+          Write-Host 'COMPILING KING''S BOT'
+          Write-Host '========================================'
 
-          $compileProcess = Start-Process `
-            -FilePath $metaEditor.FullName `
-            -ArgumentList $compileArguments `
+          Write-Host "MetaEditor: $env:METAEDITOR"
+          Write-Host "Source: $env:SOURCE"
+
+          $arguments = '/compile:"' + $env:SOURCE + '" /log'
+
+          Write-Host "Compile arguments: $arguments"
+
+          $process = Start-Process `
+            -FilePath $env:METAEDITOR `
+            -ArgumentList $arguments `
             -Wait `
             -PassThru `
             -NoNewWindow
 
-          Write-Host "MetaEditor exit code: $($compileProcess.ExitCode)"
-
-          if ($compileProcess.ExitCode -ne 0) {
-            throw "MetaEditor failed while compiling $($source.Name)."
-          }
+          Write-Host "MetaEditor exit code: $($process.ExitCode)"
 
           $ex5 = [System.IO.Path]::ChangeExtension(
-            $source.FullName,
+            $env:SOURCE,
             '.ex5'
           )
 
-          if (-not (Test-Path $ex5)) {
-            throw "Compilation finished but EX5 was not created: $ex5"
+          if ($process.ExitCode -ne 0) {
+            throw "MetaEditor failed while compiling $($env:SOURCE)."
           }
 
-          Write-Host "========================================"
-          Write-Host "COMPILATION SUCCESSFUL"
-          Write-Host "========================================"
-          Write-Host $ex5
+          if (-not (Test-Path $ex5)) {
+            throw "Compilation completed but EX5 file was not created: $ex5"
+          }
+
+          Write-Host 'Compilation successful.'
+          Write-Host "EX5: $ex5"
+
+      - name: Prepare King's Bot package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
 
           $package = Join-Path $env:RUNNER_TEMP 'KingsBot_Package'
 
@@ -155,12 +192,24 @@ jobs:
             -Path $package |
             Out-Null
 
-          Copy-Item `
-            -Path $ex5 `
-            -Destination $package `
-            -Force
+          $files = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter '*.ex5' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue
 
-          Write-Host "Package prepared:"
+          if (-not $files) {
+            throw 'No EX5 files were found.'
+          }
+
+          foreach ($file in $files) {
+            Copy-Item `
+              -Path $file.FullName `
+              -Destination $package `
+              -Force
+          }
+
           Get-ChildItem $package
 
       - name: Upload King's Bot package
