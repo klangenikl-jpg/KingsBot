@@ -1,153 +1,207 @@
-          # ------------------------------------------------------------
-          # 5. Compile with MetaEditor and capture ALL compiler output.
-          # ------------------------------------------------------------
-          $expectedEx5 = [System.IO.Path]::ChangeExtension($stagedMain, ".ex5")
+name: Build King's Bot
 
-          if (Test-Path $expectedEx5) {
-            Remove-Item -Path $expectedEx5 -Force
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Compile King's Bot
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+
+      - name: Checkout King's Bot
+        uses: actions/checkout@v4
+
+      - name: Download MetaTrader 5 installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+
+          Write-Host "Downloading MetaTrader 5 installer..."
+
+          Invoke-WebRequest `
+            -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
+            -OutFile $installer
+
+          if (-not (Test-Path -LiteralPath $installer)) {
+            throw "MetaTrader 5 installer was not downloaded."
           }
 
-          Write-Host "========================================"
-          Write-Host "           COMPILING KING'S BOT"
-          Write-Host "========================================"
-          Write-Host "MetaEditor:"
-          Write-Host "  $metaEditor"
-          Write-Host "Source:"
-          Write-Host "  $stagedMain"
-          Write-Host ""
+          Write-Host "Installer downloaded successfully."
 
-          $arguments = @(
-            "/compile:`"$stagedMain`"",
-            "/include:`"$platformMql5`"",
-            "/log"
-          )
+      - name: Install MetaTrader 5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
 
-          Write-Host "MetaEditor arguments:"
-          $arguments | ForEach-Object {
-            Write-Host "  $_"
-          }
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
-          Write-Host ""
-          Write-Host "Starting MetaEditor compiler..."
+          Write-Host "Starting MetaTrader 5 installer..."
 
-          $compileProcess = Start-Process `
-            -FilePath $metaEditor `
-            -ArgumentList $arguments `
+          $process = Start-Process `
+            -FilePath $installer `
+            -ArgumentList '/auto' `
             -Wait `
             -PassThru
 
-          Write-Host ""
-          Write-Host "MetaEditor process finished."
-          Write-Host "MetaEditor exit code:"
-          Write-Host $compileProcess.ExitCode
-          Write-Host ""
+          if ($null -eq $process) {
+            throw "MetaTrader 5 installer process could not be started."
+          }
 
-          # ------------------------------------------------------------
-          # Search for compiler logs produced by MetaEditor.
-          # ------------------------------------------------------------
-          Write-Host "========================================"
-          Write-Host "           SEARCHING COMPILER LOGS"
-          Write-Host "========================================"
+          Write-Host "Installer exit code: $($process.ExitCode)"
 
-          $logCandidates = @()
+          if ($process.ExitCode -notin @(0, 1)) {
+            throw "Unexpected MetaTrader 5 installer exit code: $($process.ExitCode)"
+          }
 
-          $logCandidates += Get-ChildItem `
-            -Path $expertRoot `
-            -Filter "*.log" `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue
+          Write-Host "MetaTrader 5 installer completed."
 
-          $logCandidates += Get-ChildItem `
-            -Path $env:RUNNER_TEMP `
-            -Filter "*.log" `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue
+      - name: Locate MetaEditor
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
 
-          $logCandidates = @(
-            $logCandidates |
-              Sort-Object FullName -Unique
+          Write-Host "Searching for MetaEditor..."
+
+          $searchRoots = @(
+            $env:APPDATA
+            $env:LOCALAPPDATA
+            $env:RUNNER_TEMP
+            $env:ProgramFiles
+            ${env:ProgramFiles(x86)}
           )
 
-          if ($logCandidates.Count -gt 0) {
+          $metaEditor = $null
 
-            Write-Host ""
-            Write-Host "Compiler log files found:"
+          foreach ($root in $searchRoots) {
 
-            foreach ($log in $logCandidates) {
-
-              Write-Host ""
-              Write-Host "----------------------------------------"
-              Write-Host "LOG: $($log.FullName)"
-              Write-Host "----------------------------------------"
-
-              Get-Content `
-                -Path $log.FullName `
-                -ErrorAction SilentlyContinue
-
-              Write-Host ""
+            if ([string]::IsNullOrWhiteSpace($root)) {
+              continue
             }
 
-          }
-          else {
-            Write-Host ""
-            Write-Host "NO .LOG FILE WAS FOUND."
-            Write-Host ""
-          }
+            if (-not (Test-Path -LiteralPath $root)) {
+              continue
+            }
 
-          # ------------------------------------------------------------
-          # Also show the generated files in the source directory.
-          # ------------------------------------------------------------
-          Write-Host "========================================"
-          Write-Host "       BUILD DIRECTORY AFTER COMPILE"
-          Write-Host "========================================"
+            $found = Get-ChildItem `
+              -Path $root `
+              -Filter 'metaeditor64.exe' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
 
-          Get-ChildItem `
-            -Path $expertRoot `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue |
-            Select-Object FullName, Length |
-            Format-Table -AutoSize
+            if ($found) {
+              $metaEditor = $found.FullName
+              break
+            }
 
-          Write-Host ""
+            $found = Get-ChildItem `
+              -Path $root `
+              -Filter 'metaeditor.exe' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
 
-          # ------------------------------------------------------------
-          # Do NOT trust the MetaEditor exit code alone.
-          # The real success condition is the generated EX5.
-          # ------------------------------------------------------------
-          if (-not (Test-Path $expectedEx5)) {
-
-            Write-Host ""
-            Write-Host "========================================"
-            Write-Host "          COMPILATION FAILED"
-            Write-Host "========================================"
-            Write-Host ""
-            Write-Host "Expected EX5 was not generated:"
-            Write-Host $expectedEx5
-            Write-Host ""
-
-            throw "MetaEditor did not generate the expected EX5 file. See compiler output above."
-
+            if ($found) {
+              $metaEditor = $found.FullName
+              break
+            }
           }
 
-          $ex5Info = Get-Item $expectedEx5
+          if ([string]::IsNullOrWhiteSpace($metaEditor)) {
+            Write-Host "MetaEditor was not found."
 
-          if ($ex5Info.Length -le 0) {
-            throw "The generated EX5 exists but is empty."
+            Get-ChildItem `
+              -Path 'C:\Users' `
+              -Filter 'metaeditor64.exe' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 20 -ExpandProperty FullName
+
+            throw "MetaEditor executable was not found."
           }
 
-          Write-Host ""
-          Write-Host "========================================"
-          Write-Host "           COMPILATION SUCCESS"
-          Write-Host "========================================"
-          Write-Host "EX5:"
-          Write-Host "  $expectedEx5"
-          Write-Host "Size:"
-          Write-Host "  $($ex5Info.Length) bytes"
-          Write-Host ""
+          Write-Host "MetaEditor found:"
+          Write-Host $metaEditor
 
-          "KINGSBOT_EX5=$expectedEx5" | Out-File `
+          "METAEDITOR=$metaEditor" | Out-File `
             -FilePath $env:GITHUB_ENV `
-            -Encoding utf8
+            -Append
+
+      - name: Locate King's Bot source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $workspace = $env:GITHUB_WORKSPACE
+
+          $mq5Files = @(
+            Get-ChildItem `
+              -Path $workspace `
+              -Filter '*.mq5' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue
+          )
+
+          if ($mq5Files.Count -eq 0) {
+            throw "No MQ5 source files were found in the repository."
+          }
+
+          Write-Host "MQ5 files found:"
+
+          foreach ($file in $mq5Files) {
+            Write-Host " - $($file.FullName)"
+          }
+
+          "SOURCE_ROOT=$workspace" | Out-File `
+            -FilePath $env:GITHUB_ENV `
+            -Append
+
+      - name: Show MQL5 include files
+        shell: pwsh
+        run: |
+          $mqhFiles = @(
+            Get-ChildItem `
+              -Path $env:SOURCE_ROOT `
+              -Filter '*.mqh' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue
+          )
+
+          Write-Host "MQH files found: $($mqhFiles.Count)"
+
+          foreach ($file in $mqhFiles) {
+            Write-Host " - $($file.FullName)"
+          }
+
+      - name: Compile King's Bot
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $mq5Files = @(
+            Get-ChildItem `
+              -Path $env:SOURCE_ROOT `
+              -Filter '*.mq5' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue
+          )
+
+          if ($mq5Files.Count -eq 0) {
+            throw "No
