@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ---------------------------------------------------------
-      # 2. INSTALL METATRADER 5
+      # 2. DOWNLOAD AND INSTALL METATRADER 5
       # ---------------------------------------------------------
       - name: Install MetaTrader 5
         shell: pwsh
@@ -40,7 +40,10 @@ jobs:
 
           $mt5Url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
 
-          Write-Host "Downloading MetaTrader 5 installer..."
+          Write-Host "========================================"
+          Write-Host "DOWNLOADING METATRADER 5"
+          Write-Host "========================================"
+
           Invoke-WebRequest `
             -Uri $mt5Url `
             -OutFile $installer
@@ -49,27 +52,75 @@ jobs:
             throw "MetaTrader 5 installer was not downloaded."
           }
 
+          Write-Host "Installer downloaded:"
+          Write-Host $installer
+
+          Write-Host ""
+          Write-Host "Creating installation directory..."
+
           New-Item `
             -ItemType Directory `
             -Path $mt5Root `
             -Force |
             Out-Null
 
-          Write-Host "Installing MetaTrader 5..."
+          Write-Host "Installation directory:"
+          Write-Host $mt5Root
 
-          & $installer /auto "/path:$mt5Root"
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "INSTALLING METATRADER 5"
+          Write-Host "========================================"
 
-          $exitCode = $LASTEXITCODE
+          $arguments = @(
+            '/auto'
+            "/path:`"$mt5Root`""
+          )
 
-          Write-Host "MT5 installer exit code: $exitCode"
-
-          if ($exitCode -ne 0) {
-            throw "MetaTrader 5 installation failed with exit code $exitCode."
+          Write-Host "Installer arguments:"
+          $arguments | ForEach-Object {
+            Write-Host $_
           }
+
+          $process = Start-Process `
+            -FilePath $installer `
+            -ArgumentList $arguments `
+            -Wait `
+            -PassThru
+
+          if ($null -eq $process) {
+            throw "Failed to start the MetaTrader 5 installer process."
+          }
+
+          Write-Host ""
+          Write-Host "Installer process ID:"
+          Write-Host $process.Id
+
+          Write-Host ""
+          Write-Host "Installer exit code:"
+          Write-Host $process.ExitCode
+
+          if ($process.ExitCode -ne 0) {
+            throw "MetaTrader 5 installer returned exit code $($process.ExitCode)."
+          }
+
+          Write-Host ""
+          Write-Host "Checking installation directory..."
 
           if (-not (Test-Path -LiteralPath $mt5Root)) {
-            throw "Expected MetaTrader 5 installation directory was not created."
+            throw "MetaTrader 5 installation directory was not created."
           }
+
+          Write-Host "MT5 installation directory exists."
+
+          Write-Host ""
+          Write-Host "Installed files:"
+          Get-ChildItem `
+            -Path $mt5Root `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 100 -ExpandProperty FullName
 
       # ---------------------------------------------------------
       # 3. LOCATE METAEDITOR
@@ -79,40 +130,73 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $mt5Root = Join-Path $env:RUNNER_TEMP 'MT5'
+          Write-Host "========================================"
+          Write-Host "LOCATING METAEDITOR"
+          Write-Host "========================================"
 
-          Write-Host "Searching for MetaEditor..."
+          $searchRoots = @(
+            (Join-Path $env:RUNNER_TEMP 'MT5'),
+            "$env:ProgramFiles\MetaTrader 5",
+            "$env:ProgramFiles(x86)\MetaTrader 5",
+            "$env:LOCALAPPDATA\Programs\MetaTrader 5"
+          )
 
-          $metaEditor = Get-ChildItem `
-            -Path $mt5Root `
-            -Filter 'MetaEditor64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+          $metaEditor = $null
 
-          if (-not $metaEditor) {
-            $metaEditor = Get-ChildItem `
-              -Path $mt5Root `
+          foreach ($root in $searchRoots) {
+
+            if (-not (Test-Path -LiteralPath $root)) {
+              continue
+            }
+
+            Write-Host "Searching:"
+            Write-Host $root
+
+            $found = Get-ChildItem `
+              -Path $root `
+              -Filter 'metaeditor64.exe' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+
+            if ($found) {
+              $metaEditor = $found
+              break
+            }
+
+            $found = Get-ChildItem `
+              -Path $root `
               -Filter 'metaeditor.exe' `
               -File `
               -Recurse `
               -ErrorAction SilentlyContinue |
               Select-Object -First 1
+
+            if ($found) {
+              $metaEditor = $found
+              break
+            }
           }
 
           if (-not $metaEditor) {
-            Write-Host "MetaTrader installation contents:"
+            Write-Host ""
+            Write-Host "MetaEditor was not found."
+            Write-Host ""
+            Write-Host "Searching the runner for diagnostic purposes..."
+
             Get-ChildItem `
-              -Path $mt5Root `
-              -Recurse `
+              -Path 'C:\' `
+              -Filter 'metaeditor64.exe' `
               -File `
+              -Recurse `
               -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty FullName
+              Select-Object -First 10 -ExpandProperty FullName
 
             throw "MetaEditor executable was not found."
           }
 
+          Write-Host ""
           Write-Host "MetaEditor found:"
           Write-Host $metaEditor.FullName
 
@@ -131,8 +215,9 @@ jobs:
 
           $workspace = $env:GITHUB_WORKSPACE
 
-          Write-Host "GitHub workspace:"
-          Write-Host $workspace
+          Write-Host "========================================"
+          Write-Host "LOCATING MQL5 SOURCE"
+          Write-Host "========================================"
 
           $mq5Files = @(
             Get-ChildItem `
@@ -144,18 +229,11 @@ jobs:
           )
 
           if ($mq5Files.Count -eq 0) {
-            Write-Host "Repository contents:"
-            Get-ChildItem `
-              -Path $workspace `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Select-Object -ExpandProperty FullName
-
             throw "No .mq5 source files were found."
           }
 
           Write-Host "MQL5 source files found:"
+
           foreach ($file in $mq5Files) {
             Write-Host " - $($file.FullName)"
           }
@@ -166,7 +244,7 @@ jobs:
               -Append
 
       # ---------------------------------------------------------
-      # 5. SHOW INCLUDE FILES
+      # 5. LOCATE MQL5 INCLUDE FILES
       # ---------------------------------------------------------
       - name: Locate MQL5 include files
         shell: pwsh
@@ -174,6 +252,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $workspace = $env:GITHUB_WORKSPACE
+
+          Write-Host "========================================"
+          Write-Host "LOCATING MQL5 INCLUDE FILES"
+          Write-Host "========================================"
 
           $mqhFiles = @(
             Get-ChildItem `
@@ -191,12 +273,16 @@ jobs:
           }
 
       # ---------------------------------------------------------
-      # 6. COMPILE MQL5 FILES
+      # 6. COMPILE KING'S BOT
       # ---------------------------------------------------------
       - name: Compile King's Bot
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
+          Write-Host "========================================"
+          Write-Host "COMPILING KING'S BOT"
+          Write-Host "========================================"
 
           $mq5Files = @(
             Get-ChildItem `
@@ -208,7 +294,7 @@ jobs:
           )
 
           if ($mq5Files.Count -eq 0) {
-            throw "No MQL5 files available for compilation."
+            throw "No MQL5 files are available for compilation."
           }
 
           $buildFailed = $false
@@ -216,28 +302,29 @@ jobs:
           foreach ($file in $mq5Files) {
 
             Write-Host ""
-            Write-Host "========================================"
-            Write-Host "COMPILING: $($file.Name)"
-            Write-Host "========================================"
+            Write-Host "Compiling:"
+            Write-Host $file.FullName
 
-            $sourcePath = $file.FullName
-            $logPath = [System.IO.Path]::ChangeExtension(
-              $sourcePath,
-              '.log'
+            $arguments = @(
+              "/compile:$($file.FullName)"
+              '/log'
             )
 
-            & $env:METAEDITOR `
-              "/compile:$sourcePath" `
-              "/log"
+            & $env:METAEDITOR @arguments
 
             $exitCode = $LASTEXITCODE
 
             Write-Host "MetaEditor exit code: $exitCode"
 
-            if (Test-Path -LiteralPath $logPath) {
+            $logFile = [System.IO.Path]::ChangeExtension(
+              $file.FullName,
+              '.log'
+            )
+
+            if (Test-Path -LiteralPath $logFile) {
               Write-Host ""
               Write-Host "Compiler log:"
-              Get-Content -LiteralPath $logPath
+              Get-Content -LiteralPath $logFile
             }
 
             if ($exitCode -ne 0) {
@@ -251,12 +338,16 @@ jobs:
           }
 
       # ---------------------------------------------------------
-      # 7. FIND GENERATED EX5 FILES
+      # 7. LOCATE GENERATED EX5 FILES
       # ---------------------------------------------------------
       - name: Locate generated EX5 files
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
+          Write-Host "========================================"
+          Write-Host "LOCATING GENERATED EX5 FILES"
+          Write-Host "========================================"
 
           $ex5Files = @(
             Get-ChildItem `
@@ -271,14 +362,12 @@ jobs:
             throw "Compilation completed but no EX5 files were found."
           }
 
-          Write-Host "Generated EX5 files:"
-
           foreach ($file in $ex5Files) {
             Write-Host " - $($file.FullName)"
           }
 
       # ---------------------------------------------------------
-      # 8. PACKAGE EX5 FILES
+      # 8. PACKAGE BUILD
       # ---------------------------------------------------------
       - name: Prepare King's Bot package
         shell: pwsh
@@ -305,7 +394,7 @@ jobs:
           )
 
           if ($ex5Files.Count -eq 0) {
-            throw "No EX5 files available for packaging."
+            throw "No EX5 files are available for packaging."
           }
 
           foreach ($file in $ex5Files) {
