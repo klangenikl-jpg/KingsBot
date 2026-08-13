@@ -1,7 +1,5 @@
 #pragma once
 
-#include "KB_StrategySignal.mqh"
-
 class CKingsBotDecisionEngine
 {
 public:
@@ -13,8 +11,6 @@ public:
       const double min_confidence = 0.55
    )
    {
-      // Reset decision explicitly because KBStrategySignal
-      // does not contain a Reset() method.
       decision.direction   = KB_SIGNAL_NONE;
       decision.confidence  = 0.0;
       decision.entry       = 0.0;
@@ -23,18 +19,13 @@ public:
       decision.strategy    = "";
       decision.reason      = "";
 
-      if(signal_count <= 0)
+      int count = ArraySize(signals);
+
+      if(signal_count <= 0 || count <= 0)
          return false;
 
-      int count = signal_count;
-
-      // Never read beyond the actual signal array.
-      int available = ArraySize(signals);
-      if(count > available)
-         count = available;
-
-      if(count <= 0)
-         return false;
+      if(signal_count < count)
+         count = signal_count;
 
       double buy  = 0.0;
       double sell = 0.0;
@@ -43,7 +34,6 @@ public:
       {
          if(signals[i].direction == KB_SIGNAL_BUY)
             buy += signals[i].confidence;
-
          else if(signals[i].direction == KB_SIGNAL_SELL)
             sell += signals[i].confidence;
       }
