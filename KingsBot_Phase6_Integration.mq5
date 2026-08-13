@@ -21,39 +21,31 @@ input double InpLots = 0.01;
 input ENUM_TIMEFRAMES InpTimeframe = PERIOD_M15;
 
 
-CKingsBotSwingStrategy g_swing;
-CKingsBotStructureStrategy g_structure;
-CKingsBotLiquidityStrategy g_liquidity;
-CKingsBotOrderBlockStrategy g_orderblock;
-CKingsBotFVGStrategy g_fvg;
+CKingsBotSwingStrategy       g_swing;
+CKingsBotStructureStrategy   g_structure;
+CKingsBotLiquidityStrategy   g_liquidity;
+CKingsBotOrderBlockStrategy  g_orderblock;
+CKingsBotFVGStrategy         g_fvg;
 
-CKingsBotDecisionEngine g_decision;
-CKingsBotRiskManager g_risk;
-CKingsBotExecutionManager g_execution;
+CKingsBotDecisionEngine      g_decision;
+CKingsBotRiskManager         g_risk;
+CKingsBotExecutionManager    g_execution;
 
 
 datetime g_last_bar = 0;
-double g_day_start_equity = 0.0;
-int g_day_of_year = -1;
+double   g_day_start_equity = 0.0;
+int      g_day_of_year = -1;
 
 
 void RefreshDailyEquityBaseline()
 {
    MqlDateTime now;
-
-   TimeToStruct(
-      TimeCurrent(),
-      now
-   );
+   TimeToStruct(TimeCurrent(), now);
 
    if(now.day_of_year != g_day_of_year)
    {
       g_day_of_year = now.day_of_year;
-
-      g_day_start_equity =
-         AccountInfoDouble(
-            ACCOUNT_EQUITY
-         );
+      g_day_start_equity = AccountInfoDouble(ACCOUNT_EQUITY);
    }
 }
 
@@ -71,17 +63,12 @@ int OnInit()
       InpMaxSpreadPoints
    );
 
-   g_day_start_equity =
-      AccountInfoDouble(
-         ACCOUNT_EQUITY
-      );
+   g_day_start_equity = AccountInfoDouble(
+      ACCOUNT_EQUITY
+   );
 
    MqlDateTime now;
-
-   TimeToStruct(
-      TimeCurrent(),
-      now
-   );
+   TimeToStruct(TimeCurrent(), now);
 
    g_day_of_year = now.day_of_year;
    g_last_bar = 0;
@@ -106,15 +93,12 @@ void OnTick()
 
    g_last_bar = bar;
 
-
    RefreshDailyEquityBaseline();
 
 
-   double equity =
-      AccountInfoDouble(
-         ACCOUNT_EQUITY
-      );
-
+   double equity = AccountInfoDouble(
+      ACCOUNT_EQUITY
+   );
 
    if(g_risk.DailyLossLimitReached(
       g_day_start_equity,
@@ -211,7 +195,6 @@ void OnTick()
 
 
    KBStrategySignal decision;
-
    decision.Reset();
 
 
@@ -224,32 +207,25 @@ void OnTick()
       return;
 
 
-   double point =
-      SymbolInfoDouble(
-         _Symbol,
-         SYMBOL_POINT
-      );
+   double point = SymbolInfoDouble(
+      _Symbol,
+      SYMBOL_POINT
+   );
 
+   int digits = (int)SymbolInfoInteger(
+      _Symbol,
+      SYMBOL_DIGITS
+   );
 
-   int digits =
-      (int)SymbolInfoInteger(
-         _Symbol,
-         SYMBOL_DIGITS
-      );
+   double bid = SymbolInfoDouble(
+      _Symbol,
+      SYMBOL_BID
+   );
 
-
-   double bid =
-      SymbolInfoDouble(
-         _Symbol,
-         SYMBOL_BID
-      );
-
-
-   double ask =
-      SymbolInfoDouble(
-         _Symbol,
-         SYMBOL_ASK
-      );
+   double ask = SymbolInfoDouble(
+      _Symbol,
+      SYMBOL_ASK
+   );
 
 
    if(point <= 0.0)
@@ -259,56 +235,4 @@ void OnTick()
       return;
 
 
-   double sl_dist = 100.0 * point;
-   double tp_dist = 200.0 * point;
-
-
-   if(decision.direction == KB_SIGNAL_BUY)
-   {
-      double sl = NormalizeDouble(
-         ask - sl_dist,
-         digits
-      );
-
-      double tp = NormalizeDouble(
-         ask + tp_dist,
-         digits
-      );
-
-
-      g_execution.Buy(
-         _Symbol,
-         InpLots,
-         sl,
-         tp,
-         "KingsBot Phase6"
-      );
-
-      return;
-   }
-
-
-   if(decision.direction == KB_SIGNAL_SELL)
-   {
-      double sl = NormalizeDouble(
-         bid + sl_dist,
-         digits
-      );
-
-      double tp = NormalizeDouble(
-         bid - tp_dist,
-         digits
-      );
-
-
-      g_execution.Sell(
-         _Symbol,
-         InpLots,
-         sl,
-         tp,
-         "KingsBot Phase6"
-      );
-
-      return;
-   }
-}
+  
