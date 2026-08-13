@@ -16,4 +16,15 @@ struct KBStrategySignal
    double take_profit;
    string strategy;
    string reason;
+
+   void Reset()
+   {
+      direction   = KB_SIGNAL_NONE;
+      confidence  = 0.0;
+      entry       = 0.0;
+      stop_loss   = 0.0;
+      take_profit = 0.0;
+      strategy    = "";
+      reason      = "";
+   }
 };
