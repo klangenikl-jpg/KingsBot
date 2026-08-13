@@ -7,54 +7,45 @@ class CKingsBotDecisionEngine
 public:
    bool BuildDecision(
       KBStrategySignal &signals[],
+      const int signal_count,
       KBStrategySignal &decision,
-      double min_confidence
+      const double min_confidence = 0.55
    )
    {
       decision.Reset();
 
-      double buy_score = 0.0;
-      double sell_score = 0.0;
+      double buy  = 0.0;
+      double sell = 0.0;
 
-      int count = ArraySize(signals);
+      int n = signal_count;
 
-      if(count <= 0)
+      if(n <= 0)
          return false;
 
-      for(int i = 0; i < count; i++)
+      for(int i = 0; i < n; i++)
       {
          if(signals[i].direction == KB_SIGNAL_BUY)
-            buy_score += signals[i].confidence;
+            buy += signals[i].confidence;
 
          if(signals[i].direction == KB_SIGNAL_SELL)
-            sell_score += signals[i].confidence;
+            sell += signals[i].confidence;
       }
 
-      if(buy_score >= min_confidence && buy_score > sell_score)
+      if(buy >= min_confidence && buy > sell)
       {
-         decision.direction = KB_SIGNAL_BUY;
-         decision.confidence = buy_score / count;
-
-         if(decision.confidence > 1.0)
-            decision.confidence = 1.0;
-
-         decision.strategy = "Decision";
-         decision.reason = "Bullish consensus";
-
+         decision.direction  = KB_SIGNAL_BUY;
+         decision.confidence = MathMin(1.0, buy / n);
+         decision.strategy   = "Decision";
+         decision.reason     = "Bullish consensus";
          return true;
       }
 
-      if(sell_score >= min_confidence && sell_score > buy_score)
+      if(sell >= min_confidence && sell > buy)
       {
-         decision.direction = KB_SIGNAL_SELL;
-         decision.confidence = sell_score / count;
-
-         if(decision.confidence > 1.0)
-            decision.confidence = 1.0;
-
-         decision.strategy = "Decision";
-         decision.reason = "Bearish consensus";
-
+         decision.direction  = KB_SIGNAL_SELL;
+         decision.confidence = MathMin(1.0, sell / n);
+         decision.strategy   = "Decision";
+         decision.reason     = "Bearish consensus";
          return true;
       }
 
