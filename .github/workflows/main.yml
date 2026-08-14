@@ -318,4 +318,217 @@ jobs:
           $reports = 'C:\MT5\reports'
 
           if (Test-Path $reports) {
-            Remove-Item $reports -Re
+            Remove-Item $reports -Recurse -Force
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Path $reports `
+            -Force | Out-Null
+
+          $config = 'C:\MT5\KingsBot_Phase6_Tester.ini'
+
+          @"
+[Common]
+KeepPrivate=1
+
+[Experts]
+AllowLiveTrading=0
+AllowDllImport=0
+Enabled=1
+
+[Tester]
+Expert=KingsBot\KingsBot_Phase6_Integration.ex5
+Symbol=EURUSD
+Period=M15
+Model=4
+Optimization=0
+ExecutionMode=0
+FromDate=2025.01.01
+ToDate=2026.08.01
+Deposit=10000
+Currency=USD
+Leverage=1:100
+UseLocal=1
+UseRemote=0
+UseCloud=0
+Visual=0
+Report=reports\KingsBot_Phase6_Tester.htm
+ReplaceReport=1
+ShutdownTerminal=1
+"@ | Set-Content `
+            -Path $config `
+            -Encoding Unicode
+
+          Write-Host "Strategy Tester configuration:"
+          Get-Content $config
+
+          "KB_TEST_CONFIG=$config" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run MT5 Strategy Tester
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "KING'S BOT PHASE 6 STRATEGY TEST"
+          Write-Host "========================================"
+          Write-Host "Model: Every Tick based on Real Ticks"
+          Write-Host "Symbol: EURUSD"
+          Write-Host "Period: M15"
+          Write-Host ""
+
+          $process = Start-Process `
+            -FilePath $env:MT5_TERMINAL `
+            -ArgumentList @(
+              '/portable',
+              "/config:$env:KB_TEST_CONFIG"
+            ) `
+            -WorkingDirectory 'C:\MT5' `
+            -PassThru
+
+          Write-Host "Tester process started: $($process.Id)"
+
+          $finished = Wait-Process `
+            -Id $process.Id `
+            -Timeout 900 `
+            -ErrorAction SilentlyContinue
+
+          if (-not $finished) {
+            Write-Host "Tester exceeded 15 minutes."
+
+            Stop-Process `
+              -Id $process.Id `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+            throw "Strategy Tester timed out."
+          }
+
+          Write-Host "Strategy Tester process finished."
+
+      - name: Verify Strategy Tester result
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $report = 'C:\MT5\reports\KingsBot_Phase6_Tester.htm'
+
+          Write-Host "Looking for tester report..."
+
+          if (-not (Test-Path $report)) {
+            Write-Host "Report was not produced."
+
+            Write-Host ""
+            Write-Host "MT5 logs:"
+
+            Get-ChildItem `
+              'C:\MT5' `
+              -Recurse `
+              -File `
+              -Include '*.log' `
+              -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length, LastWriteTime
+
+            throw "Strategy Tester did not produce a report."
+          }
+
+          if ((Get-Item $report).Length -le 0) {
+            throw "Strategy Tester report is empty."
+          }
+
+          Write-Host ""
+          Write-Host "PHASE 6 STRATEGY TEST: REPORT PRODUCED"
+          Write-Host "Report size: $((Get-Item $report).Length) bytes"
+
+          $runtimeLogs = Get-ChildItem `
+            'C:\MT5' `
+            -Recurse `
+            -File `
+            -Include '*.log' `
+            -ErrorAction SilentlyContinue
+
+          if ($runtimeLogs) {
+            $critical = $runtimeLogs |
+              Select-String `
+                -Pattern '(?i)array out of range|zero divide|cannot load|failed to load|invalid pointer|uninit|critical error' `
+                -ErrorAction SilentlyContinue
+
+            if ($critical) {
+              Write-Host ""
+              Write-Host "CRITICAL RUNTIME MESSAGES:"
+
+              $critical | ForEach-Object {
+                Write-Host "$($_.Path): $($_.Line)"
+              }
+
+              throw "Critical runtime messages were found."
+            }
+          }
+
+          Write-Host ""
+          Write-Host "PHASE 6 FINAL VALIDATION: PASS"
+
+      - name: Package validation evidence
+        if: always()
+        shell: pwsh
+        run: |
+          $evidence = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'phase6-validation-evidence'
+
+          New-Item `
+            -ItemType Directory `
+            -Path $evidence `
+            -Force | Out-Null
+
+          if ($env:KB_EX5 -and (Test-Path $env:KB_EX5)) {
+            Copy-Item `
+              $env:KB_EX5 `
+              $evidence `
+              -Force
+          }
+
+          if ($env:KB_COMPILE_LOG -and (Test-Path $env:KB_COMPILE_LOG)) {
+            Copy-Item `
+              $env:KB_COMPILE_LOG `
+              $evidence `
+              -Force
+          }
+
+          if (Test-Path 'C:\MT5\reports\KingsBot_Phase6_Tester.htm') {
+            Copy-Item `
+              'C:\MT5\reports\KingsBot_Phase6_Tester.htm' `
+              $evidence `
+              -Force
+          }
+
+          Get-ChildItem `
+            'C:\MT5' `
+            -Recurse `
+            -File `
+            -Include '*.log' `
+            -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              Copy-Item `
+                $_.FullName `
+                $evidence `
+                -Force `
+                -ErrorAction SilentlyContinue
+            }
+
+          Write-Host "Validation evidence:"
+
+          Get-ChildItem $evidence |
+            Select-Object Name, Length, LastWriteTime
+
+      - name: Upload Phase 6 validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KingsBot-Phase6-Final-Validation
+          path: phase6-validation-evidence
+          if-no-files-found: error
+          retention-days: 14
