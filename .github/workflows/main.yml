@@ -1,6 +1,9 @@
 name: King's Bot - Phase 6 Final Validation
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -269,8 +272,8 @@ Report=reports\KingsBot_Phase6_Tester.htm
 ReplaceReport=1
 ShutdownTerminal=1
 "@ | Set-Content `
-      -Path $config `
-      -Encoding Unicode
+            -Path $config `
+            -Encoding Unicode
 
           Write-Host "Strategy Tester configuration:"
           Get-Content $config
@@ -394,14 +397,14 @@ ShutdownTerminal=1
             -Path $evidence `
             -Force | Out-Null
 
-          if (Test-Path $env:KB_EX5) {
+          if ($env:KB_EX5 -and (Test-Path $env:KB_EX5)) {
             Copy-Item `
               $env:KB_EX5 `
               $evidence `
               -Force
           }
 
-          if (Test-Path $env:KB_COMPILE_LOG) {
+          if ($env:KB_COMPILE_LOG -and (Test-Path $env:KB_COMPILE_LOG)) {
             Copy-Item `
               $env:KB_COMPILE_LOG `
               $evidence `
