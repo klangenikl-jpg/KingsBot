@@ -23,6 +23,7 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
           Write-Host "Downloading MetaTrader 5 installer..."
+
           Invoke-WebRequest `
             -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
             -OutFile $installer
@@ -61,13 +62,13 @@ jobs:
 
           Write-Host "Installer exit code: $($process.ExitCode)"
 
-          if ($process.ExitCode -ne 0) {
-            Write-Warning "MetaTrader installer returned exit code $($process.ExitCode)."
-            Write-Warning "We will verify the actual installation before failing."
-          }
+          $terminal = Join-Path `
+            $installPath `
+            'terminal64.exe'
 
-          $terminal = Join-Path $installPath 'terminal64.exe'
-          $metaEditor = Join-Path $installPath 'metaeditor64.exe'
+          $metaEditor = Join-Path `
+            $installPath `
+            'MetaEditor64.exe'
 
           $deadline = (Get-Date).AddSeconds(90)
 
@@ -75,7 +76,7 @@ jobs:
             ((-not (Test-Path $terminal)) -or (-not (Test-Path $metaEditor))) -and
             ((Get-Date) -lt $deadline)
           ) {
-            Write-Host "Waiting for MetaTrader installation to finish..."
+            Write-Host "Waiting for MetaTrader installation..."
             Start-Sleep -Seconds 5
           }
 
@@ -113,7 +114,6 @@ jobs:
             'terminal64.exe'
 
           Write-Host "Starting MetaTrader in portable mode..."
-          Write-Host "Terminal: $terminal"
 
           $process = Start-Process `
             -FilePath $terminal `
@@ -124,13 +124,14 @@ jobs:
 
           if (-not $process.HasExited) {
             Write-Host "Stopping MetaTrader after initialization..."
+
             Stop-Process `
               -Id $process.Id `
               -Force `
               -ErrorAction SilentlyContinue
           }
 
-          Write-Host "MetaTrader initialization step completed."
+          Write-Host "MetaTrader initialization completed."
 
       - name: Locate MQL5 root and required standard includes
         shell: pwsh
@@ -186,7 +187,6 @@ jobs:
           if (-not $tradeInclude) {
             Write-Host "Trade.mqh was not found."
 
-            Write-Host "Listing MT5 installation contents:"
             Get-ChildItem `
               -Path $env:MT5_INSTALL `
               -Recurse `
@@ -201,12 +201,6 @@ jobs:
             throw "MetaEditor64.exe could not be located."
           }
 
-          # Trade.mqh:
-          # MQL5\Include\Trade\Trade.mqh
-          #
-          # Parent 1 = Trade
-          # Parent 2 = Include
-          # Parent 3 = MQL5
           $tradeDirectory = Split-Path `
             $tradeInclude.FullName `
             -Parent
@@ -272,7 +266,7 @@ jobs:
             }
 
           if (-not $sourceFiles) {
-            throw "No .mq5 or .mqh source files were found in the repository."
+            throw "No .mq5 or .mqh source files were found."
           }
 
           foreach ($file in $sourceFiles) {
@@ -330,7 +324,7 @@ jobs:
             'Include\Trade\Trade.mqh'
 
           if (-not (Test-Path $trade)) {
-            throw "Trade.mqh is missing from the MQL5 installation: $trade"
+            throw "Trade.mqh is missing: $trade"
           }
 
           Write-Host "Trade.mqh verified:"
@@ -342,57 +336,109 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $source = $env:KINGSBOT_SOURCE
-          $log = Join-Path `
-            $env:RUNNER_TEMP `
-            'KingsBot_compile.log'
+          $metaEditor = $env:METAEDITOR
+          $mql5Root = $env:MQL5_ROOT
 
           if (-not (Test-Path $source)) {
             throw "Compile source does not exist: $source"
           }
 
-          if (-not (Test-Path $env:METAEDITOR)) {
-            throw "MetaEditor does not exist: $env:METAEDITOR"
+          if (-not (Test-Path $metaEditor)) {
+            throw "MetaEditor does not exist: $metaEditor"
           }
 
-          Write-Host "========================================"
-          Write-Host "KING'S BOT COMPILATION"
-          Write-Host "========================================"
-          Write-Host "Source: $source"
-          Write-Host "MetaEditor: $env:METAEDITOR"
-          Write-Host "MQL5 root: $env:MQL5_ROOT"
-          Write-Host "Include root: $env:MQL5_INCLUDE"
-          Write-Host "Log: $log"
-          Write-Host "========================================"
-
-          & $env:METAEDITOR `
-            "/compile:$source" `
-            "/inc:$env:MQL5_INCLUDE" `
-            "/log:$log"
-
-          $editorExitCode = $LASTEXITCODE
-
-          Write-Host "MetaEditor exit code: $editorExitCode"
-
-          if (Test-Path $log) {
-            Write-Host "========== COMPILER LOG =========="
-            Get-Content $log
-            Write-Host "=================================="
+          if (-not (Test-Path $mql5Root)) {
+            throw "MQL5 root does not exist: $mql5Root"
           }
-          else {
-            Write-Warning "MetaEditor did not create the expected compiler log."
+
+          $tradeInclude = Join-Path `
+            $mql5Root `
+            'Include\Trade\Trade.mqh'
+
+          if (-not (Test-Path $tradeInclude)) {
+            throw "Trade.mqh was not found: $tradeInclude"
           }
+
+          $log = [System.IO.Path]::ChangeExtension(
+            $source,
+            '.log'
+          )
 
           $ex5 = [System.IO.Path]::ChangeExtension(
             $source,
             '.ex5'
           )
 
+          if (Test-Path $log) {
+            Remove-Item `
+              -LiteralPath $log `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+          if (Test-Path $ex5) {
+            Remove-Item `
+              -LiteralPath $ex5 `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+          Write-Host "========================================"
+          Write-Host "KING'S BOT COMPILATION"
+          Write-Host "========================================"
+          Write-Host "Source: $source"
+          Write-Host "MetaEditor: $metaEditor"
+          Write-Host "MQL5 root: $mql5Root"
+          Write-Host "Trade.mqh: $tradeInclude"
+          Write-Host "Compiler log: $log"
+          Write-Host "========================================"
+
+          $arguments = @(
+            "/compile:`"$source`"",
+            "/include:`"$mql5Root`"",
+            "/log"
+          )
+
+          Write-Host "Starting MetaEditor compiler..."
+
+          $process = Start-Process `
+            -FilePath $metaEditor `
+            -ArgumentList $arguments `
+            -Wait `
+            -PassThru
+
+          Write-Host "MetaEditor exit code: $($process.ExitCode)"
+
+          Start-Sleep -Seconds 2
+
+          if (Test-Path $log) {
+            Write-Host ""
+            Write-Host "========== COMPILER LOG =========="
+            Get-Content `
+              -LiteralPath $log
+            Write-Host "=================================="
+          }
+          else {
+            throw "MetaEditor did not create the expected compiler log: $log"
+          }
+
           if (-not (Test-Path $ex5)) {
             throw "Compilation failed: EX5 file was not created."
           }
 
-          Write-Host "Compilation produced:"
-          Write-Host $ex5
+          $ex5Info = Get-Item `
+            -LiteralPath $ex5
+
+          if ($ex5Info.Length -le 0) {
+            throw "Compilation produced a zero-byte EX5."
+          }
+
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host "KING'S BOT COMPILATION SUCCEEDED"
+          Write-Host "========================================"
+          Write-Host "EX5: $($ex5Info.FullName)"
+          Write-Host "Size: $($ex5Info.Length) bytes"
 
       - name: Prepare King's Bot artifact
         shell: pwsh
