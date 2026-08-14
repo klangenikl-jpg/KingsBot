@@ -1,4 +1,7 @@
-#pragma once
+#ifndef KINGSBOT_DECISION_ENGINE_MQH
+#define KINGSBOT_DECISION_ENGINE_MQH
+
+#include "KB_StrategySignal.mqh"
 
 class CKingsBotDecisionEngine
 {
@@ -28,29 +31,42 @@ public:
       {
          if(signals[i].direction == KB_SIGNAL_BUY)
             buy_score += signals[i].confidence;
-         else
-         if(signals[i].direction == KB_SIGNAL_SELL)
+         else if(signals[i].direction == KB_SIGNAL_SELL)
             sell_score += signals[i].confidence;
       }
 
-      if(buy_score >= min_confidence && buy_score > sell_score)
+      if(
+         buy_score >= min_confidence &&
+         buy_score > sell_score
+      )
       {
          decision.direction  = KB_SIGNAL_BUY;
-         decision.confidence = MathMin(1.0, buy_score / signal_count);
-         decision.strategy   = "Decision";
-         decision.reason     = "Bullish consensus";
+         decision.confidence =
+            MathMin(1.0, buy_score / signal_count);
+
+         decision.strategy = "Decision";
+         decision.reason   = "Bullish consensus";
+
          return true;
       }
 
-      if(sell_score >= min_confidence && sell_score > buy_score)
+      if(
+         sell_score >= min_confidence &&
+         sell_score > buy_score
+      )
       {
          decision.direction  = KB_SIGNAL_SELL;
-         decision.confidence = MathMin(1.0, sell_score / signal_count);
-         decision.strategy   = "Decision";
-         decision.reason     = "Bearish consensus";
+         decision.confidence =
+            MathMin(1.0, sell_score / signal_count);
+
+         decision.strategy = "Decision";
+         decision.reason   = "Bearish consensus";
+
          return true;
       }
 
       return false;
    }
 };
+
+#endif
