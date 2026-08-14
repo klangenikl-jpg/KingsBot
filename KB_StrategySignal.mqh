@@ -1,4 +1,5 @@
-#pragma once
+#ifndef KB_STRATEGY_SIGNAL_MQH
+#define KB_STRATEGY_SIGNAL_MQH
 
 enum KBSignalDirection
 {
@@ -28,3 +29,5 @@ struct KBStrategySignal
       reason      = "";
    }
 };
+
+#endif
