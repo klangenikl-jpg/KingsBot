@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
+
       - name: Checkout King's Bot
         uses: actions/checkout@v5
 
@@ -35,11 +36,15 @@ jobs:
             throw "KingsBot_Phase6_Integration.mq5 was not found."
           }
 
-          "KB_SOURCE=$($source.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "KB_SOURCE_ROOT=$($source.Directory.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "KB_SOURCE=$($source.FullName)" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          "KB_SOURCE_ROOT=$($source.Directory.FullName)" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
           Write-Host "SOURCE:"
           Write-Host $source.FullName
+
 
       - name: Install and verify MetaTrader 5
         shell: pwsh
@@ -47,53 +52,57 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          $customRoot = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
 
-          Write-Host "Downloading official MetaTrader 5 installer..."
+          Write-Host "Downloading official MetaTrader 5 web installer..."
 
           Invoke-WebRequest `
             -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
-            -OutFile $installer
+            -OutFile $installer `
+            -UseBasicParsing
 
           if (-not (Test-Path $installer)) {
             throw "MetaTrader 5 installer was not downloaded."
           }
 
-          Write-Host "Installer downloaded:"
-          Write-Host $installer
-          Write-Host "Installer size: $((Get-Item $installer).Length) bytes"
+          if (Test-Path $customRoot) {
+            Remove-Item $customRoot -Recurse -Force
+          }
 
-          Write-Host "Starting MetaTrader 5 unattended installation..."
+          New-Item `
+            -ItemType Directory `
+            -Path $customRoot `
+            -Force | Out-Null
+
+          Write-Host "Installing MetaTrader 5..."
 
           $install = Start-Process `
             -FilePath $installer `
-            -ArgumentList '/auto' `
+            -ArgumentList @(
+              '/auto',
+              "/path:`"$customRoot`""
+            ) `
             -Wait `
             -PassThru
 
-          $installerExitCode = $install.ExitCode
-
-          Write-Host "MetaTrader 5 installer exit code: $installerExitCode"
-
-          # The installer exit code is NOT treated as the final installation test.
-          # We verify the actual platform executables below.
+          Write-Host "Custom-path installer exit code: $($install.ExitCode)"
 
           $searchRoots = @(
-            'C:\Program Files\MetaTrader 5',
-            'C:\Program Files (x86)\MetaTrader 5',
+            $customRoot,
             'C:\Program Files',
             'C:\Program Files (x86)',
-            $env:LOCALAPPDATA
-          )
+            (Join-Path $env:LOCALAPPDATA 'Programs'),
+            (Join-Path $env:APPDATA 'MetaQuotes')
+          ) |
+            Where-Object {
+              $_ -and (Test-Path $_)
+            } |
+            Select-Object -Unique
 
           $terminal = $null
           $editor = $null
 
-          Write-Host "Searching for terminal64.exe and metaeditor64.exe..."
-
           foreach ($root in $searchRoots) {
-            if (-not (Test-Path $root)) {
-              continue
-            }
 
             if (-not $terminal) {
               $terminal = Get-ChildItem `
@@ -121,193 +130,76 @@ jobs:
           }
 
           if (-not $terminal -or -not $editor) {
-            Write-Host ""
-            Write-Host "MT5 executable verification FAILED."
-            Write-Host "Installer exit code: $installerExitCode"
 
-            if ($terminal) {
-              Write-Host "terminal64.exe found at:"
-              Write-Host $terminal.FullName
+            Write-Host "Custom-path installation did not produce both executables."
+            Write-Host "Retrying official installer in standard automatic mode..."
+
+            $retry = Start-Process `
+              -FilePath $installer `
+              -ArgumentList @('/auto') `
+              -Wait `
+              -PassThru
+
+            Write-Host "Standard-path installer exit code: $($retry.ExitCode)"
+
+            $standardRoots = @(
+              'C:\Program Files',
+              'C:\Program Files (x86)',
+              (Join-Path $env:LOCALAPPDATA 'Programs'),
+              (Join-Path $env:APPDATA 'MetaQuotes')
+            ) |
+              Where-Object {
+                $_ -and (Test-Path $_)
+              } |
+              Select-Object -Unique
+
+            foreach ($root in $standardRoots) {
+
+              if (-not $terminal) {
+                $terminal = Get-ChildItem `
+                  -Path $root `
+                  -Recurse `
+                  -File `
+                  -Filter 'terminal64.exe' `
+                  -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+              }
+
+              if (-not $editor) {
+                $editor = Get-ChildItem `
+                  -Path $root `
+                  -Recurse `
+                  -File `
+                  -Filter 'metaeditor64.exe' `
+                  -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+              }
+
+              if ($terminal -and $editor) {
+                break
+              }
             }
-            else {
-              Write-Host "terminal64.exe NOT FOUND."
-            }
-
-            if ($editor) {
-              Write-Host "metaeditor64.exe found at:"
-              Write-Host $editor.FullName
-            }
-            else {
-              Write-Host "metaeditor64.exe NOT FOUND."
-            }
-
-            throw "MetaTrader 5 installation could not be verified."
           }
 
-          Write-Host ""
-          Write-Host "MT5 INSTALLATION VERIFIED"
-          Write-Host "Installer exit code: $installerExitCode"
-          Write-Host "Terminal: $($terminal.FullName)"
-          Write-Host "MetaEditor: $($editor.FullName)"
+          if (-not $terminal -or -not $editor) {
 
-          $installedRoot = $terminal.Directory.FullName
+            Write-Host "========== MT5 INSTALL DIAGNOSTICS =========="
 
-          if (-not (Test-Path 'C:\MT5')) {
-            New-Item -ItemType Directory -Path 'C:\MT5' -Force | Out-Null
-          }
+            Write-Host "Custom installer exit code: $($install.ExitCode)"
 
-          Write-Host "Staging MT5 to C:\MT5..."
-
-          Copy-Item `
-            -Path (Join-Path $installedRoot '*') `
-            -Destination 'C:\MT5' `
-            -Recurse `
-            -Force
-
-          $stagedEditor = Get-ChildItem `
-            -Path 'C:\MT5' `
-            -Recurse `
-            -File `
-            -Filter 'metaeditor64.exe' |
-            Select-Object -First 1
-
-          $stagedTerminal = Get-ChildItem `
-            -Path 'C:\MT5' `
-            -Recurse `
-            -File `
-            -Filter 'terminal64.exe' |
-            Select-Object -First 1
-
-          if (-not $stagedEditor) {
-            throw "Staged MetaEditor64.exe was not found."
-          }
-
-          if (-not $stagedTerminal) {
-            throw "Staged terminal64.exe was not found."
-          }
-
-          Write-Host "STAGED MT5 VERIFIED"
-          Write-Host "MetaEditor: $($stagedEditor.FullName)"
-          Write-Host "Terminal: $($stagedTerminal.FullName)"
-
-          "METAEDITOR=$($stagedEditor.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "MT5_TERMINAL=$($stagedTerminal.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Prepare clean KingsBot MT5 tree
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $target = 'C:\MT5\MQL5\Experts\KingsBot'
-
-          if (Test-Path $target) {
-            Remove-Item $target -Recurse -Force
-          }
-
-          New-Item -ItemType Directory -Path $target -Force | Out-Null
-
-          Copy-Item `
-            -Path (Join-Path $env:KB_SOURCE_ROOT '*') `
-            -Destination $target `
-            -Recurse `
-            -Force
-
-          $compileSource = Join-Path $target 'KingsBot_Phase6_Integration.mq5'
-
-          if (-not (Test-Path $compileSource)) {
-            throw "Prepared Phase 6 source was not found."
-          }
-
-          "KB_COMPILE_SOURCE=$compileSource" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Compile Phase 6
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $source = $env:KB_COMPILE_SOURCE
-          $log = [IO.Path]::ChangeExtension($source, '.log')
-          $ex5 = [IO.Path]::ChangeExtension($source, '.ex5')
-
-          Remove-Item $log, $ex5 -Force -ErrorAction SilentlyContinue
-
-          $process = Start-Process `
-            -FilePath $env:METAEDITOR `
-            -ArgumentList @("/compile:$source", "/log") `
-            -WorkingDirectory (Split-Path $source -Parent) `
-            -Wait `
-            -PassThru
-
-          Write-Host "MetaEditor exit code: $($process.ExitCode)"
-
-          if (-not (Test-Path $log)) {
-            throw "Compiler log was not produced."
-          }
-
-          Get-Content $log
-
-          if (-not (Test-Path $ex5)) {
-            throw "Compilation did not produce the Phase 6 EX5."
-          }
-
-          if ((Get-Item $ex5).Length -le 0) {
-            throw "Phase 6 EX5 is empty."
-          }
-
-          $compilerErrors = Select-String `
-            -Path $log `
-            -Pattern '(?i)\berror\b' `
-            -ErrorAction SilentlyContinue
-
-          if ($compilerErrors) {
-            $compilerErrors | ForEach-Object {
-              Write-Host $_.Line
+            if ($retry) {
+              Write-Host "Standard installer exit code: $($retry.ExitCode)"
             }
 
-            throw "Compiler log contains error text."
-          }
+            Write-Host "Installed MT5-related executables found:"
 
-          Write-Host "PHASE 6 COMPILATION: PASS"
-          Write-Host "EX5 SIZE: $((Get-Item $ex5).Length) bytes"
-
-          "KB_EX5=$ex5" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "KB_COMPILE_LOG=$log" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Prepare Strategy Tester
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $reports = 'C:\MT5\reports'
-
-          if (Test-Path $reports) {
-            Remove-Item $reports -Recurse -Force
-          }
-
-          New-Item -ItemType Directory -Path $reports -Force | Out-Null
-
-          $config = 'C:\MT5\KingsBot_Phase6_Tester.ini'
-
-          $configLines = @(
-            '[Common]'
-            'KeepPrivate=1'
-            ''
-            '[Experts]'
-            'AllowLiveTrading=0'
-            'AllowDllImport=0'
-            'Enabled=1'
-            ''
-            '[Tester]'
-            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
-            'Symbol=EURUSD'
-            'Period=M15'
-            'Model=4'
-            'Optimization=0'
-            'ExecutionMode=0'
-            'FromDate=2025.01.01'
-            'ToDate=2026.08.01'
-            'Deposit=10000'
-            'Currency=USD'
-            'Leverage=1:100'
-            'UseLocal=1'
-            'UseRemote=
+            Get-ChildItem `
+              'C:\Program Files',
+              'C:\Program Files (x86)',
+              $env:LOCALAPPDATA,
+              $env:APPDATA `
+              -Recurse `
+              -File `
+              -Include 'terminal*.exe','metaeditor*.exe' `
+              -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length,
