@@ -205,30 +205,4 @@ jobs:
           Write-Host "Terminal:   $($terminal.FullName)"
           Write-Host "MetaEditor: $($editor.FullName)"
 
-      - name: Prepare clean KingsBot MT5 tree
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $target = 'C:\MT5\MQL5\Experts\KingsBot'
-
-          if (Test-Path $target) {
-            Remove-Item $target -Recurse -Force
-          }
-
-          New-Item `
-            -ItemType Directory `
-            -Path $target `
-            -Force | Out-Null
-
-          Copy-Item `
-            -Path (Join-Path $env:KB_SOURCE_ROOT '*') `
-            -Destination $target `
-            -Recurse `
-            -Force
-
-          $compileSource = Join-Path `
-            $target `
-            'KingsBot_Phase6_Integration.mq5'
-
-          if (-not (Test-Path $compileSource)) {
+      - name: Prepare clean Kings
