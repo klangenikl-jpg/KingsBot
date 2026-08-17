@@ -19,7 +19,7 @@ jobs:
       - name: Checkout King's Bot
         uses: actions/checkout@v4
 
-      - name: Build compile test and collect evidence
+      - name: Build compile and diagnose MT5 Strategy Tester
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -42,12 +42,12 @@ jobs:
 
           $sourceRoot = $source.Directory.FullName
 
-          Write-Host "Phase 6 source: $($source.FullName)"
+          Write-Host "SOURCE: $($source.FullName)"
 
-          Write-Host '=== INSTALL AND VERIFY METATRADER 5 ==='
+          Write-Host '=== INSTALL METATRADER 5 ==='
 
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
-          $customRoot = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
+          $mt5Root = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
 
           Invoke-WebRequest `
             -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
@@ -58,79 +58,50 @@ jobs:
             throw 'MetaTrader 5 installer was not downloaded.'
           }
 
-          if (Test-Path $customRoot) {
-            Remove-Item $customRoot -Recurse -Force
+          if (Test-Path $mt5Root) {
+            Remove-Item $mt5Root -Recurse -Force
           }
 
           New-Item `
             -ItemType Directory `
-            -Path $customRoot `
+            -Path $mt5Root `
             -Force | Out-Null
 
           $install = Start-Process `
             -FilePath $installer `
             -ArgumentList @(
               '/auto',
-              "/path:`"$customRoot`""
+              "/path:`"$mt5Root`""
             ) `
             -Wait `
             -PassThru
 
-          Write-Host "Custom installer exit code: $($install.ExitCode)"
+          Write-Host "Installer exit code: $($install.ExitCode)"
 
-          $searchRoots = @(
-            $customRoot,
-            'C:\Program Files',
-            'C:\Program Files (x86)',
-            (Join-Path $env:LOCALAPPDATA 'Programs'),
-            (Join-Path $env:APPDATA 'MetaQuotes')
-          ) |
-            Where-Object {
-              $_ -and (Test-Path $_)
-            } |
-            Select-Object -Unique
+          $terminal = Get-ChildItem `
+            -Path $mt5Root `
+            -Recurse `
+            -File `
+            -Filter 'terminal64.exe' `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
-          $terminal = $null
-          $editor = $null
-
-          foreach ($root in $searchRoots) {
-
-            if (-not $terminal) {
-              $terminal = Get-ChildItem `
-                -Path $root `
-                -Recurse `
-                -File `
-                -Filter 'terminal64.exe' `
-                -ErrorAction SilentlyContinue |
-                Select-Object -First 1
-            }
-
-            if (-not $editor) {
-              $editor = Get-ChildItem `
-                -Path $root `
-                -Recurse `
-                -File `
-                -Filter 'metaeditor64.exe' `
-                -ErrorAction SilentlyContinue |
-                Select-Object -First 1
-            }
-
-            if ($terminal -and $editor) {
-              break
-            }
-          }
+          $editor = Get-ChildItem `
+            -Path $mt5Root `
+            -Recurse `
+            -File `
+            -Filter 'metaeditor64.exe' `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
           if (-not $terminal -or -not $editor) {
-            throw 'MetaTrader 5 installation could not be verified.'
+            throw 'MetaTrader 5 terminal or MetaEditor was not found.'
           }
 
-          $mt5Root = Split-Path $terminal.FullName -Parent
+          Write-Host "TERMINAL: $($terminal.FullName)"
+          Write-Host "METAEDITOR: $($editor.FullName)"
 
-          Write-Host "MT5 root: $mt5Root"
-          Write-Host "Terminal: $($terminal.FullName)"
-          Write-Host "MetaEditor: $($editor.FullName)"
-
-          Write-Host '=== PREPARE CLEAN KINGSBOT MT5 TREE ==='
+          Write-Host '=== PREPARE KINGSBOT ==='
 
           $target = Join-Path `
             $mt5Root `
@@ -156,12 +127,12 @@ jobs:
             'KingsBot_Phase6_Integration.mq5'
 
           if (-not (Test-Path $compileSource)) {
-            throw "Prepared Phase 6 source was not found: $compileSource"
+            throw "Prepared source missing: $compileSource"
           }
 
-          Write-Host "Prepared source: $compileSource"
+          Write-Host "COMPILE SOURCE: $compileSource"
 
-          Write-Host '=== COMPILE PHASE 6 ==='
+          Write-Host '=== COMPILE ==='
 
           $compileLog = [IO.Path]::ChangeExtension(
             $compileSource,
@@ -198,11 +169,11 @@ jobs:
           Get-Content $compileLog
 
           if (-not (Test-Path $ex5)) {
-            throw 'Compilation did not produce KingsBot_Phase6_Integration.ex5.'
+            throw 'EX5 was not produced.'
           }
 
           if ((Get-Item $ex5).Length -le 0) {
-            throw 'Compiled EX5 is empty.'
+            throw 'EX5 is empty.'
           }
 
           $compilerErrors = Select-String `
@@ -211,15 +182,14 @@ jobs:
             -ErrorAction SilentlyContinue
 
           if ($compilerErrors) {
-            $compilerErrors |
-              ForEach-Object {
-                Write-Host $_.Line
-              }
+            $compilerErrors | ForEach-Object {
+              Write-Host $_.Line
+            }
 
-            throw 'Compiler log contains error text.'
+            throw 'Compiler log contains errors.'
           }
 
-          Write-Host "COMPILE PASS - EX5 size: $((Get-Item $ex5).Length) bytes"
+          Write-Host "COMPILE PASS: $((Get-Item $ex5).Length) bytes"
 
           Copy-Item `
             $ex5 `
@@ -231,7 +201,18 @@ jobs:
             $evidence `
             -Force
 
-          Write-Host '=== PREPARE STRATEGY TESTER ==='
+          Write-Host '=== VERIFY EA LOCATION ==='
+
+          Write-Host "Expected EA:"
+          Write-Host $ex5
+
+          if (-not (Test-Path $ex5)) {
+            throw 'EA verification failed.'
+          }
+
+          Write-Host 'EA verification PASS.'
+
+          Write-Host '=== PREPARE TESTER ==='
 
           $reportDir = Join-Path `
             $mt5Root `
@@ -260,10 +241,10 @@ jobs:
             'Enabled=1'
             ''
             '[Tester]'
-            'Expert=Experts\KingsBot\KingsBot_Phase6_Integration.ex5'
+            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
             'Symbol=EURUSD'
             'Period=M15'
-            'Model=4'
+            'Model=0'
             'Optimization=0'
             'ExecutionMode=0'
             'FromDate=2025.01.01'
@@ -285,7 +266,7 @@ jobs:
             -Value ($configLines -join [Environment]::NewLine) `
             -Encoding Unicode
 
-          Write-Host '=== TESTER CONFIGURATION ==='
+          Write-Host '=== TESTER CONFIG ==='
           Get-Content $config
 
           Copy-Item `
@@ -293,16 +274,7 @@ jobs:
             $evidence `
             -Force
 
-          Write-Host '=== START STRATEGY TESTER ==='
-
-          $report = Join-Path `
-            $reportDir `
-            'KingsBot_Phase6_Tester.htm'
-
-          Remove-Item `
-            $report `
-            -Force `
-            -ErrorAction SilentlyContinue
+          Write-Host '=== START MT5 TESTER ==='
 
           $tester = Start-Process `
             -FilePath $terminal.FullName `
@@ -313,16 +285,17 @@ jobs:
             -WorkingDirectory $mt5Root `
             -PassThru
 
-          Write-Host "MT5 process ID: $($tester.Id)"
+          Write-Host "MT5 PID: $($tester.Id)"
 
           $deadline = (Get-Date).AddMinutes(15)
-          $reportFound = $false
+          $report = Join-Path `
+            $reportDir `
+            'KingsBot_Phase6_Tester.htm'
 
           while ((Get-Date) -lt $deadline) {
 
             if (Test-Path $report) {
-              $reportFound = $true
-              Write-Host 'TESTER REPORT DETECTED.'
+              Write-Host '=== TESTER REPORT FOUND ==='
               break
             }
 
@@ -331,76 +304,91 @@ jobs:
               -ErrorAction SilentlyContinue
 
             if (-not $running) {
-              Write-Host 'MT5 process exited before producing the report.'
+              Write-Host 'MT5 exited before the tester report was created.'
               break
             }
 
-            Start-Sleep -Seconds 10
+            Start-Sleep -Seconds 5
           }
 
-          if ($reportFound) {
+          Write-Host '=== COLLECT MT5 LOGS ==='
 
-            if ((Get-Item $report).Length -le 0) {
-              throw 'Strategy Tester report exists but is empty.'
+          $logFiles = @()
+
+          $logFiles += Get-ChildItem `
+            -Path (Join-Path $mt5Root 'Logs') `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue
+
+          $logFiles += Get-ChildItem `
+            -Path (Join-Path $mt5Root 'Tester\logs') `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue
+
+          $logFiles += Get-ChildItem `
+            -Path (Join-Path $mt5Root 'Tester') `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in @(
+                '.log',
+                '.xml',
+                '.htm',
+                '.html'
+              )
             }
 
-            Write-Host "STRATEGY TEST PASS - report size: $((Get-Item $report).Length) bytes"
+          $logFiles = $logFiles |
+            Where-Object {
+              $_ -and (Test-Path $_.FullName)
+            } |
+            Sort-Object FullName -Unique
+
+          foreach ($log in $logFiles) {
+
+            Write-Host ''
+            Write-Host "===== $($log.FullName) ====="
+
+            try {
+              Get-Content `
+                $log.FullName `
+                -ErrorAction Stop
+            }
+            catch {
+              Write-Host "Could not read log: $($_.Exception.Message)"
+            }
+
+            Copy-Item `
+              $log.FullName `
+              $evidence `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+          Write-Host '=== TESTER DIRECTORY TREE ==='
+
+          if (Test-Path (Join-Path $mt5Root 'Tester')) {
+            Get-ChildItem `
+              -Path (Join-Path $mt5Root 'Tester') `
+              -Recurse `
+              -File `
+              -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length, LastWriteTime |
+              Format-Table -AutoSize
+          }
+
+          if (Test-Path $report) {
+
+            if ((Get-Item $report).Length -le 0) {
+              throw 'Tester report exists but is empty.'
+            }
 
             Copy-Item `
               $report `
               $evidence `
               -Force
 
-          } else {
-
-            Write-Host '=== MT5 DIAGNOSTICS ==='
-
-            $logRoots = @(
-              (Join-Path $mt5Root 'Logs'),
-              (Join-Path $mt5Root 'Tester\logs'),
-              (Join-Path $mt5Root 'Tester')
-            ) |
-              Where-Object {
-                Test-Path $_
-              } |
-              Select-Object -Unique
-
-            foreach ($logRoot in $logRoots) {
-
-              Write-Host "Searching: $logRoot"
-
-              Get-ChildItem `
-                -Path $logRoot `
-                -Recurse `
-                -File `
-                -ErrorAction SilentlyContinue |
-                Where-Object {
-                  $_.Extension -in @('.log', '.xml', '.htm', '.html')
-                } |
-                ForEach-Object {
-
-                  Write-Host "Found: $($_.FullName)"
-
-                  Copy-Item `
-                    $_.FullName `
-                    $evidence `
-                    -Force `
-                    -ErrorAction SilentlyContinue
-                }
-            }
-
-            Write-Host '=== END MT5 DIAGNOSTICS ==='
-
-            throw 'Strategy Tester did not produce a report.'
-          }
-
-          Write-Host '=== PHASE 6 VALIDATION COMPLETE ==='
-
-      - name: Upload Phase 6 validation evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: KingsBot-Phase6-Final-Validation
-          path: phase6-validation-evidence
-          if-no-files-found: warn
-          retention-days: 14
+            Write-Host "
