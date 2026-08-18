@@ -13,7 +13,7 @@ jobs:
   phase7-runtime-validation:
     name: Phase 7 Runtime and Strategy Tester Validation
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
       - name: Checkout King's Bot
@@ -75,6 +75,9 @@ jobs:
 
           "METAEDITOR=$($editor.FullName)" |
             Out-File $env:GITHUB_ENV -Append
+
+          Write-Host "MT5_ROOT=$($terminal.Directory.FullName)"
+          Write-Host "METAEDITOR=$($editor.FullName)"
 
       - name: Prepare Phase 7 evidence directory
         shell: pwsh
@@ -195,9 +198,9 @@ jobs:
           ) |
             Set-Content `
               (Join-Path $evidence 'build-summary.txt') `
-              -Encoding UTF8
+              -Encoding ASCII
 
-      - name: Prepare Strategy Tester configuration
+      - name: Prepare clean MT5 tester configuration
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -210,12 +213,22 @@ jobs:
             $env:MT5_ROOT `
             'KingsBot_Phase7_Tester.ini'
 
+          $reportRelative = 'phase7-report.htm'
+          $reportAbsolute = Join-Path `
+            $env:MT5_ROOT `
+            $reportRelative
+
+          Remove-Item `
+            $reportAbsolute `
+            -Force `
+            -ErrorAction SilentlyContinue
+
           @(
             '[Tester]'
             'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
             'Symbol=EURUSD'
             'Period=M15'
-            'Model=4'
+            'Model=0'
             'Optimization=0'
             'FromDate=2025.01.01'
             'ToDate=2026.08.01'
@@ -223,21 +236,22 @@ jobs:
             'Currency=USD'
             'Leverage=1:100'
             'Visual=0'
-            'Report=KingsBot_Phase7_Tester'
+            'Report=phase7-report'
             'ReplaceReport=1'
             'ShutdownTerminal=1'
           ) |
             Set-Content `
               $config `
-              -Encoding Unicode
+              -Encoding ASCII
 
           Copy-Item `
             $config `
-            $evidence `
+            (Join-Path $evidence 'KingsBot_Phase7_Tester.ini') `
             -Force
 
-          Write-Host 'Strategy Tester configuration prepared.'
+          Write-Host '===== PHASE 7 TESTER CONFIG ====='
           Get-Content $config
+          Write-Host '=================================='
 
       - name: Run MT5 Strategy Tester
         shell: pwsh
@@ -264,6 +278,14 @@ jobs:
             $env:MT5_ROOT `
             'KingsBot_Phase7_Tester.ini'
 
+          $report = Join-Path `
+            $env:MT5_ROOT `
+            'phase7-report.htm'
+
+          Write-Host "Terminal: $($terminal.FullName)"
+          Write-Host "Config: $config"
+          Write-Host "Expected report: $report"
+
           $tester = Start-Process `
             -FilePath $terminal.FullName `
             -ArgumentList @(
@@ -275,55 +297,98 @@ jobs:
 
           Write-Host "MT5 tester process started with PID $($tester.Id)."
 
-          $deadline = (Get-Date).AddMinutes(20)
-          $report = $null
+          $deadline = (Get-Date).AddMinutes(12)
+          $reportFound = $false
 
           while ((Get-Date) -lt $deadline) {
 
-            $reportCandidates = Get-ChildItem `
-              $env:MT5_ROOT `
-              -Recurse `
-              -File `
-              -Include '*.htm','*.html','*.xml' `
-              -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.Name -like 'KingsBot_Phase7_Tester*'
-              } |
-              Sort-Object LastWriteTime -Descending
-
-            if ($reportCandidates) {
-              $report = $reportCandidates | Select-Object -First 1
+            if (Test-Path $report) {
+              $reportFound = $true
               break
             }
 
+            if ($tester.HasExited) {
+              Write-Host "MT5 terminal exited with code $($tester.ExitCode)."
+              break
+            }
+
+            Write-Host "Waiting for Strategy Tester report..."
             Start-Sleep -Seconds 10
           }
 
-          if (-not $report) {
-            Write-Host 'No Strategy Tester report was found.'
+          if ($reportFound) {
 
-            if (Get-Process -Id $tester.Id -ErrorAction SilentlyContinue) {
-              Stop-Process -Id $tester.Id -Force -ErrorAction SilentlyContinue
+            $size = (Get-Item $report).Length
+
+            if ($size -le 0) {
+              throw 'Strategy Tester report exists but is empty.'
             }
 
-            throw 'MT5 Strategy Tester did not produce a report within the allowed time.'
+            Copy-Item `
+              $report `
+              (Join-Path $evidence 'KingsBot_Phase7_Tester.htm') `
+              -Force
+
+            @(
+              'TESTER_RESULT=REPORT_FOUND'
+              "REPORT_SIZE_BYTES=$size"
+              "MT5_PROCESS_EXITED=$($tester.HasExited)"
+            ) |
+              Set-Content `
+                (Join-Path $evidence 'tester-result.txt') `
+                -Encoding ASCII
+
+            Write-Host "SUCCESS: Strategy Tester report found."
+            Write-Host "Report size: $size bytes"
+
+            if (-not $tester.HasExited) {
+              Stop-Process `
+                -Id $tester.Id `
+                -Force `
+                -ErrorAction SilentlyContinue
+            }
+
+          } else {
+
+            @(
+              'TESTER_RESULT=REPORT_NOT_FOUND'
+              "MT5_PROCESS_EXITED=$($tester.HasExited)"
+              "MT5_PROCESS_ID=$($tester.Id)"
+              "EXPECTED_REPORT=$report"
+            ) |
+              Set-Content `
+                (Join-Path $evidence 'tester-result.txt') `
+                -Encoding ASCII
+
+            Write-Host 'Strategy Tester report was not produced.'
+
+            if (Test-Path $env:MT5_ROOT) {
+              Get-ChildItem `
+                $env:MT5_ROOT `
+                -Recurse `
+                -File `
+                -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.FullName -match 'Logs|Tester'
+                } |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 30 |
+                ForEach-Object {
+                  Write-Host $_.FullName
+                }
+            }
+
+            if (-not $tester.HasExited) {
+              Stop-Process `
+                -Id $tester.Id `
+                -Force `
+                -ErrorAction SilentlyContinue
+            }
+
+            throw 'MT5 started but did not produce the expected Strategy Tester report.'
           }
 
-          $reportSize = $report.Length
-
-          if ($reportSize -le 0) {
-            throw 'MT5 Strategy Tester report is empty.'
-          }
-
-          Copy-Item `
-            $report.FullName `
-            $evidence `
-            -Force
-
-          Write-Host "STRATEGY TEST REPORT FOUND: $($report.FullName)"
-          Write-Host "REPORT SIZE: $reportSize bytes"
-
-      - name: Collect MT5 runtime evidence
+      - name: Collect MT5 and Strategy Tester logs
         if: always()
         shell: pwsh
         run: |
@@ -331,38 +396,48 @@ jobs:
             $env:GITHUB_WORKSPACE `
             'phase7-validation-evidence'
 
-          $logRoots = @(
+          $roots = @(
+            $env:MT5_ROOT,
             (Join-Path $env:MT5_ROOT 'Logs'),
             (Join-Path $env:MT5_ROOT 'Tester')
           )
 
-          foreach ($root in $logRoots) {
+          foreach ($root in $roots) {
 
             if (Test-Path $root) {
 
-              $logs = Get-ChildItem `
+              Get-ChildItem `
                 $root `
                 -Recurse `
                 -File `
                 -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.Extension -in '.log','.htm','.html','.xml'
+                } |
                 Sort-Object LastWriteTime -Descending |
-                Select-Object -First 20
+                Select-Object -First 50 |
+                ForEach-Object {
 
-              foreach ($log in $logs) {
+                  $safeName = $_.Name
 
-                Copy-Item `
-                  $log.FullName `
-                  $evidence `
-                  -Force `
-                  -ErrorAction SilentlyContinue
-              }
+                  try {
+                    Copy-Item `
+                      $_.FullName `
+                      (Join-Path $evidence $safeName) `
+                      -Force `
+                      -ErrorAction Stop
+                  }
+                  catch {
+                    Write-Host "Could not copy $($_.FullName)"
+                  }
+                }
             }
           }
 
           'PHASE7_RUNTIME_EVIDENCE_COLLECTION=COMPLETE' |
             Set-Content `
               (Join-Path $evidence 'runtime-validation.txt') `
-              -Encoding UTF8
+              -Encoding ASCII
 
       - name: Upload Phase 7 validation evidence
         if: always()
@@ -372,7 +447,3 @@ jobs:
           path: phase7-validation-evidence
           if-no-files-found: warn
           retention-days: 14
-
-Paste → commit with "Fix Phase 7 tester credential gate" → commit directly to "main".
-
-This version has no "Verify MT5 credentials" step.
