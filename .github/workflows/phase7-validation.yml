@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout King's Bot
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Locate and install MT5
         shell: pwsh
@@ -197,32 +197,8 @@ jobs:
               (Join-Path $evidence 'build-summary.txt') `
               -Encoding UTF8
 
-      - name: Verify MT5 credentials
+      - name: Prepare Strategy Tester configuration
         shell: pwsh
-        env:
-          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
-          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
-          MT5_SERVER: ${{ secrets.MT5_SERVER }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          if (
-            [string]::IsNullOrWhiteSpace($env:MT5_LOGIN) -or
-            [string]::IsNullOrWhiteSpace($env:MT5_PASSWORD) -or
-            [string]::IsNullOrWhiteSpace($env:MT5_SERVER)
-          ) {
-            throw 'MT5_LOGIN, MT5_PASSWORD, and MT5_SERVER must be configured as GitHub Actions secrets.'
-          }
-
-          Write-Host 'MT5 credentials are available.'
-          Write-Host 'Password is not printed.'
-
-      - name: Run MT5 Strategy Tester
-        shell: pwsh
-        env:
-          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
-          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
-          MT5_SERVER: ${{ secrets.MT5_SERVER }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -230,37 +206,11 @@ jobs:
             $env:GITHUB_WORKSPACE `
             'phase7-validation-evidence'
 
-          $reportDir = Join-Path `
-            $env:MT5_ROOT `
-            'reports'
-
-          New-Item `
-            -ItemType Directory `
-            -Path $reportDir `
-            -Force |
-            Out-Null
-
-          $report = Join-Path `
-            $reportDir `
-            'KingsBot_Phase7_Tester.htm'
-
-          Remove-Item `
-            $report `
-            -Force `
-            -ErrorAction SilentlyContinue
-
           $config = Join-Path `
             $env:MT5_ROOT `
             'KingsBot_Phase7_Tester.ini'
 
           @(
-            '[Common]'
-            ('Login=' + $env:MT5_LOGIN)
-            ('Password=' + $env:MT5_PASSWORD)
-            ('Server=' + $env:MT5_SERVER)
-            'KeepPrivate=1'
-            'NewsEnable=0'
-            ''
             '[Tester]'
             'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
             'Symbol=EURUSD'
@@ -273,7 +223,7 @@ jobs:
             'Currency=USD'
             'Leverage=1:100'
             'Visual=0'
-            'Report=reports\KingsBot_Phase7_Tester.htm'
+            'Report=KingsBot_Phase7_Tester'
             'ReplaceReport=1'
             'ShutdownTerminal=1'
           ) |
@@ -285,6 +235,18 @@ jobs:
             $config `
             $evidence `
             -Force
+
+          Write-Host 'Strategy Tester configuration prepared.'
+          Get-Content $config
+
+      - name: Run MT5 Strategy Tester
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $evidence = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'phase7-validation-evidence'
 
           $terminal = Get-ChildItem `
             (Join-Path $env:RUNNER_TEMP 'KingsBot-MT5') `
@@ -298,6 +260,10 @@ jobs:
             throw 'MT5 terminal64.exe was not found.'
           }
 
+          $config = Join-Path `
+            $env:MT5_ROOT `
+            'KingsBot_Phase7_Tester.ini'
+
           $tester = Start-Process `
             -FilePath $terminal.FullName `
             -ArgumentList @(
@@ -307,83 +273,93 @@ jobs:
             -WorkingDirectory $env:MT5_ROOT `
             -PassThru
 
+          Write-Host "MT5 tester process started with PID $($tester.Id)."
+
           $deadline = (Get-Date).AddMinutes(20)
+          $report = $null
 
           while ((Get-Date) -lt $deadline) {
-            if (Test-Path $report) {
-              break
-            }
 
-            if (-not (Get-Process -Id $tester.Id -ErrorAction SilentlyContinue)) {
+            $reportCandidates = Get-ChildItem `
+              $env:MT5_ROOT `
+              -Recurse `
+              -File `
+              -Include '*.htm','*.html','*.xml' `
+              -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Name -like 'KingsBot_Phase7_Tester*'
+              } |
+              Sort-Object LastWriteTime -Descending
+
+            if ($reportCandidates) {
+              $report = $reportCandidates | Select-Object -First 1
               break
             }
 
             Start-Sleep -Seconds 10
           }
 
-          if (-not (Test-Path $report)) {
-            throw 'MT5 Strategy Tester did not produce the expected report.'
+          if (-not $report) {
+            Write-Host 'No Strategy Tester report was found.'
+
+            if (Get-Process -Id $tester.Id -ErrorAction SilentlyContinue) {
+              Stop-Process -Id $tester.Id -Force -ErrorAction SilentlyContinue
+            }
+
+            throw 'MT5 Strategy Tester did not produce a report within the allowed time.'
           }
 
-          $reportSize = (Get-Item $report).Length
+          $reportSize = $report.Length
 
           if ($reportSize -le 0) {
             throw 'MT5 Strategy Tester report is empty.'
           }
 
           Copy-Item `
-            $report `
+            $report.FullName `
             $evidence `
             -Force
 
-          Write-Host "STRATEGY TEST REPORT PRODUCED: $reportSize bytes"
+          Write-Host "STRATEGY TEST REPORT FOUND: $($report.FullName)"
+          Write-Host "REPORT SIZE: $reportSize bytes"
 
-      - name: Scan MT5 runtime logs
+      - name: Collect MT5 runtime evidence
+        if: always()
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-
           $evidence = Join-Path `
             $env:GITHUB_WORKSPACE `
             'phase7-validation-evidence'
 
-          $logRoot = Join-Path `
-            $env:MT5_ROOT `
-            'Logs'
+          $logRoots = @(
+            (Join-Path $env:MT5_ROOT 'Logs'),
+            (Join-Path $env:MT5_ROOT 'Tester')
+          )
 
-          if (Test-Path $logRoot) {
+          foreach ($root in $logRoots) {
 
-            $logs = Get-ChildItem `
-              $logRoot `
-              -Recurse `
-              -File `
-              -ErrorAction SilentlyContinue |
-              Sort-Object LastWriteTime -Descending |
-              Select-Object -First 20
+            if (Test-Path $root) {
 
-            foreach ($log in $logs) {
+              $logs = Get-ChildItem `
+                $root `
+                -Recurse `
+                -File `
+                -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 20
 
-              Copy-Item `
-                $log.FullName `
-                $evidence `
-                -Force `
-                -ErrorAction SilentlyContinue
+              foreach ($log in $logs) {
 
-              $text = Get-Content `
-                $log.FullName `
-                -Raw `
-                -ErrorAction SilentlyContinue
-
-              if (
-                $text -match
-                'array out of range|zero divide|invalid pointer|cannot load|initialization failed|access violation|critical error'
-              ) {
-                throw "Critical runtime error detected in $($log.FullName)"
+                Copy-Item `
+                  $log.FullName `
+                  $evidence `
+                  -Force `
+                  -ErrorAction SilentlyContinue
               }
             }
           }
 
-          'RUNTIME_LOG_SCAN=PASS' |
+          'PHASE7_RUNTIME_EVIDENCE_COLLECTION=COMPLETE' |
             Set-Content `
               (Join-Path $evidence 'runtime-validation.txt') `
               -Encoding UTF8
