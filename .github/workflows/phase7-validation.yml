@@ -372,3 +372,7 @@ jobs:
           path: phase7-validation-evidence
           if-no-files-found: warn
           retention-days: 14
+
+Paste → commit with "Fix Phase 7 tester credential gate" → commit directly to "main".
+
+This version has no "Verify MT5 credentials" step.
