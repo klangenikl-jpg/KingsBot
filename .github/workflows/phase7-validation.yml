@@ -312,7 +312,7 @@ jobs:
 
           $lines = @(
             '[Tester]'
-            'Expert=Experts\KingsBot\KingsBot_Phase6_Integration.ex5'
+            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
             'Symbol=EURUSD'
             'Period=M15'
             'Model=0'
@@ -337,7 +337,7 @@ jobs:
           [System.IO.File]::WriteAllLines(
             $config,
             $lines,
-            [System.Text.Encoding]::ASCII
+            [System.Text.Encoding]::Unicode
           )
 
           Copy-Item `
@@ -378,7 +378,19 @@ jobs:
             throw 'Tester prerequisite failed: terminal64.exe missing.'
           }
 
-          Write-Host 'All Phase 7 tester prerequisites verified.'
+          Write-Host '===== TESTER PATH CHECK ====='
+          Write-Host "EX5: $ex5"
+          Write-Host "INI: $config"
+          Write-Host "Terminal: $terminal"
+          Write-Host '============================='
+
+          $iniText = Get-Content $config -Raw
+
+          if ($iniText -notmatch 'Expert=KingsBot\\KingsBot_Phase6_Integration\.ex5') {
+            throw 'Tester INI contains an incorrect Expert path.'
+          }
+
+          Write-Host 'Tester Expert path verified.'
 
       - name: Run MT5 Strategy Tester
         shell: pwsh
@@ -401,6 +413,10 @@ jobs:
             $env:MT5_ROOT `
             'Reports\KingsBot_Phase7_Tester.htm'
 
+          $ex5 = Join-Path `
+            $env:MT5_ROOT `
+            'MQL5\Experts\KingsBot\KingsBot_Phase6_Integration.ex5'
+
           if (-not (Test-Path $terminal)) {
             throw 'terminal64.exe was not found.'
           }
@@ -408,10 +424,6 @@ jobs:
           if (-not (Test-Path $config)) {
             throw 'Tester configuration was not found.'
           }
-
-          $ex5 = Join-Path `
-            $env:MT5_ROOT `
-            'MQL5\Experts\KingsBot\KingsBot_Phase6_Integration.ex5'
 
           if (-not (Test-Path $ex5)) {
             throw 'KingsBot EX5 is missing before tester launch.'
@@ -442,6 +454,15 @@ jobs:
             (Join-Path $evidence 'mt5-version.txt')
 
           Write-Host '========================'
+
+          Write-Host '===== FINAL TESTER PATH ====='
+          Write-Host "Installed EX5:"
+          Write-Host $ex5
+          Write-Host "Tester Expert:"
+          Write-Host 'KingsBot\KingsBot_Phase6_Integration.ex5'
+          Write-Host "Tester report:"
+          Write-Host $report
+          Write-Host '=============================='
 
           Write-Host '===== LAUNCHING MT5 ====='
           Write-Host "Terminal: $terminal"
