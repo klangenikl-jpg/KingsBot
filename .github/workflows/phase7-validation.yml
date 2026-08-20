@@ -13,112 +13,62 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Checkout King's Bot
+
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create evidence directory
+      - name: Create evidence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $Evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-artifacts'
           New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
-          Set-Content -Path (Join-Path $Evidence 'phase7-started.txt') -Value 'Phase 7 started' -Encoding UTF8
           'EVIDENCE=' + $Evidence | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+          Set-Content (Join-Path $Evidence 'phase7-started.txt') 'Phase 7 started' -Encoding UTF8
 
-      - name: Locate King's Bot source
+      - name: Find source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
-          $Source = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Recurse `
-            -File `
-            -Filter 'KingsBot_Phase6_Integration.mq5' `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if (-not $Source) {
-            throw 'KingsBot_Phase6_Integration.mq5 was not found.'
-          }
-
+          $Source = Get-ChildItem $env:GITHUB_WORKSPACE -Recurse -File -Filter 'KingsBot_Phase6_Integration.mq5' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $Source) { throw 'KingsBot_Phase6_Integration.mq5 not found.' }
           'SOURCE=' + $Source.FullName | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
           Copy-Item $Source.FullName $env:EVIDENCE -Force
 
-      - name: Download MT5 installer
+      - name: Download MT5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
           $Installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
-          $Url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
-
-          Invoke-WebRequest `
-            -Uri $Url `
-            -OutFile $Installer `
-            -UseBasicParsing `
-            -TimeoutSec 180
-
-          if (-not (Test-Path $Installer)) {
-            throw 'MT5 installer download failed.'
-          }
-
-          $File = Get-Item $Installer
+          Invoke-WebRequest 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' -OutFile $Installer -UseBasicParsing
+          if (-not (Test-Path $Installer)) { throw 'MT5 download failed.' }
           $Hash = Get-FileHash -Path $Installer -Algorithm SHA256
-
-          Set-Content `
-            -Path (Join-Path $env:EVIDENCE 'mt5-download.txt') `
-            -Value ('Size=' + $File.Length + [Environment]::NewLine + 'SHA256=' + $Hash.Hash) `
-            -Encoding UTF8
-
+          Set-Content (Join-Path $env:EVIDENCE 'mt5-download.txt') ('SHA256=' + $Hash.Hash) -Encoding UTF8
           'INSTALLER=' + $Installer | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
 
       - name: Install MT5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          $Root = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
+          Remove-Item $Root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $Root -Force | Out-Null
+          $P = Start-Process $env:INSTALLER -ArgumentList '/auto',('/path=' + $Root) -Wait -PassThru
+          Set-Content (Join-Path $env:EVIDENCE 'installer-exit-code.txt') $P.ExitCode -Encoding UTF8
+          Start-Sleep -Seconds 5
+          $T = Get-ChildItem $env:RUNNER_TEMP -Recurse -File -Filter 'terminal64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $E = Get-ChildItem $env:RUNNER_TEMP -Recurse -File -Filter 'metaeditor64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $T) { $T = Get-ChildItem 'C:\Program Files' -Recurse -File -Filter 'terminal64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if ($null -eq $E) { $E = Get-ChildItem 'C:\Program Files' -Recurse -File -Filter 'metaeditor64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if ($null -eq $T) { throw 'terminal64.exe not found.' }
+          if ($null -eq $E) { throw 'metaeditor64.exe not found.' }
+          'TERMINAL=' + $T.FullName | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+          'EDITOR=' + $E.FullName | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+          'MT5ROOT=' + $T.Directory.FullName | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+          Set-Content (Join-Path $env:EVIDENCE 'mt5-location.txt') ('Terminal=' + $T.FullName + [Environment]::NewLine + 'MetaEditor=' + $E.FullName) -Encoding UTF8
 
-          $InstallRoot = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
-
-          Remove-Item $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
-
-          $Process = Start-Process `
-            -FilePath $env:INSTALLER `
-            -ArgumentList '/auto',('/path=' + $InstallRoot) `
-            -Wait `
-            -PassThru
-
-          Set-Content `
-            -Path (Join-Path $env:EVIDENCE 'mt5-installer-exit-code.txt') `
-            -Value $Process.ExitCode `
-            -Encoding UTF8
-
-          $Terminal = Get-ChildItem `
-            -Path $env:RUNNER_TEMP `
-            -Recurse `
-            -File `
-            -Filter 'terminal64.exe' `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          $Editor = Get-ChildItem `
-            -Path $env:RUNNER_TEMP `
-            -Recurse `
-            -File `
-            -Filter 'metaeditor64.exe' `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if (-not $Terminal) {
-            $Terminal = Get-ChildItem `
-              -Path 'C:\Program Files' `
-              -Recurse `
-              -File `
-              -Filter 'terminal64.exe' `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-          }
-
-          if (-not $Editor) {
-            $Editor
+      - name: Prepare source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Target =
