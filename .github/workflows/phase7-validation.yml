@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  phase7-runtime-validation:
+  phase7:
     name: Phase 7 Runtime and Strategy Tester Validation
     runs-on: windows-2022
     timeout-minutes: 60
@@ -17,137 +17,63 @@ jobs:
       - name: Checkout King's Bot
         uses: actions/checkout@v4
 
-      - name: Initialize Phase 7 evidence
+      - name: Create evidence directory
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
           $Evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-artifacts'
-
           New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
+          Set-Content -Path (Join-Path $Evidence 'phase7-started.txt') -Value "Phase 7 started $(Get-Date -Format o)" -Encoding UTF8
+          "EVIDENCE=$Evidence" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
 
-          Set-Content `
-            -Path (Join-Path $Evidence 'PHASE7_STARTED.txt') `
-            -Value "Phase 7 started: $(Get-Date -Format o)" `
-            -Encoding UTF8
+      - name: Find King's Bot source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Source = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -File -Filter 'KingsBot_Phase6_Integration.mq5' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $Source) {
+            throw 'KingsBot_Phase6_Integration.mq5 was not found in the repository.'
+          }
+          "SOURCE=$($Source.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+          Set-Content -Path (Join-Path $env:EVIDENCE 'source.txt') -Value $Source.FullName -Encoding UTF8
+          Copy-Item -Path $Source.FullName -Destination $env:EVIDENCE -Force
 
-          "PHASE7_EVIDENCE=$Evidence" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Append `
-              -Encoding UTF8
+      - name: Download MT5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          Invoke-WebRequest -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' -OutFile $Installer -UseBasicParsing
+          if (-not (Test-Path -LiteralPath $Installer)) {
+            throw 'MT5 installer download failed.'
+          }
+          $Size = (Get-Item -LiteralPath $Installer).Length
+          $Hash = (Get-FileHash -Path $Installer -Algorithm SHA256).Hash
+          Set-Content -Path (Join-Path $env:EVIDENCE 'mt5-download.txt') -Value "Size=$Size`nSHA256=$Hash" -Encoding UTF8
+          "INSTALLER=$Installer" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
 
-      - name: Record repository contents
+      - name: Install MT5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          $InstallRoot = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
+          Remove-Item -Path $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 
-          Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue |
-            Where-Object {
-              $_.FullName -notmatch '\\.git\\'
-            } |
-            Select-Object FullName, Length |
-            Format-Table -AutoSize |
-            Out-File `
-              -FilePath (Join-Path $env:PHASE7_EVIDENCE 'repository-files.txt') `
-              -Encoding UTF8
+          $Process = Start-Process -FilePath $env:INSTALLER -ArgumentList "/auto /path:$InstallRoot" -Wait -PassThru
+          Set-Content -Path (Join-Path $env:EVIDENCE 'mt5-installer-exit-code.txt') -Value $Process.ExitCode -Encoding UTF8
 
-      - name: Locate King's Bot source
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
+          $Terminal = Get-ChildItem -Path $InstallRoot -Recurse -File -Filter 'terminal64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $Editor = Get-ChildItem -Path $InstallRoot -Recurse -File -Filter 'metaeditor64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
 
-          $Files = Get-ChildItem `
-            -Path $env:GITHUB_WORKSPACE `
-            -Recurse `
-            -File `
-            -ErrorAction SilentlyContinue |
-            Where-Object {
-              $_.FullName -notmatch '\\.git\\'
-            }
-
-          $Source = $Files |
-            Where-Object {
-              $_.Name -ieq 'KingsBot_Phase6_Integration.mq5'
-            } |
-            Select-Object -First 1
-
-          if (-not $Source) {
-            $Source = $Files |
-              Where-Object {
-                $_.Extension -ieq '.mq5' -and
-                $_.Name -match 'KingsBot|King'
-              } |
-              Select-Object -First 1
+          if (-not $Terminal) {
+            throw "MT5 terminal64.exe was not found. Installer exit code: $($Process.ExitCode)"
           }
 
-          if (-not $Source) {
-            throw 'No KingsBot MQ5 source was found in the checked-out repository.'
+          if (-not $Editor) {
+            throw "MT5 metaeditor64.exe was not found. Installer exit code: $($Process.ExitCode)"
           }
 
-          "KINGSBOT_SOURCE=$($Source.FullName)" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Append `
-              -Encoding UTF8
-
-          Copy-Item `
-            -Path $Source.FullName `
-            -Destination (Join-Path $env:PHASE7_EVIDENCE $Source.Name) `
-            -Force
-
-          "Source=$($Source.FullName)" |
-            Out-File `
-              -FilePath (Join-Path $env:PHASE7_EVIDENCE 'source-result.txt') `
-              -Encoding UTF8
-
-      - name: Verify MetaQuotes connectivity
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $Connection = Test-NetConnection `
-            -ComputerName 'download.mql5.com' `
-            -Port 443 `
-            -WarningAction SilentlyContinue
-
-          $Connection |
-            Format-List |
-            Out-File `
-              -FilePath (Join-Path $env:PHASE7_EVIDENCE 'network-test.txt') `
-              -Encoding UTF8
-
-          if (-not $Connection.TcpTestSucceeded) {
-            throw 'HTTPS connectivity to download.mql5.com failed.'
-          }
-
-      - name: Download MT5 installer
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $Installer = Join-Path `
-            $env:RUNNER_TEMP `
-            'mt5setup.exe'
-
-          $Url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
-
-          Invoke-WebRequest `
-            -Uri $Url `
-            -OutFile $Installer `
-            -UseBasicParsing `
-            -TimeoutSec 180
-
-          if (-not (Test-Path -LiteralPath $Installer)) {
-            throw 'MT5 installer was not downloaded.'
-          }
-
-          $File = Get-Item -LiteralPath $Installer
-          $Hash = Get-FileHash -Path $Installer -Algorithm SHA256
-          $Signature = Get-AuthenticodeSignature -FilePath $Installer
-
-          @
+          "MT5_ROOT=$InstallRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+          "TERMINAL=$($Terminal.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+          "EDITOR=$($
