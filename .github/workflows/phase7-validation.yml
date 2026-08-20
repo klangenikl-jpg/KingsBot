@@ -20,26 +20,20 @@ jobs:
       PERIOD: M15
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create evidence directory
+      - name: Initialize evidence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-
           $Evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
-
           New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
-
-          "EVIDENCE=$Evidence" |
-            Out-File $env:GITHUB_ENV -Append -Encoding utf8
-
+          "EVIDENCE=$Evidence" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           "Phase 7 started: $(Get-Date -Format o)" |
             Set-Content (Join-Path $Evidence 'phase7-started.txt') -Encoding utf8
 
-      - name: Find source
+      - name: Locate source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -68,23 +62,17 @@ jobs:
             -Path $Source.Directory.FullName `
             -Recurse `
             -File `
-            -Include '*.mqh','*.mq5' `
+            -Include '*.mq5','*.mqh' `
             -ErrorAction SilentlyContinue |
             ForEach-Object {
               $Relative = $_.FullName.Substring(
                 $Source.Directory.FullName.Length
               ).TrimStart('\')
 
-              $Destination = Join-Path `
-                $env:EVIDENCE `
-                $Relative
-
+              $Destination = Join-Path $env:EVIDENCE $Relative
               $Parent = Split-Path $Destination -Parent
 
-              New-Item `
-                -ItemType Directory `
-                -Path $Parent `
-                -Force | Out-Null
+              New-Item -ItemType Directory -Path $Parent -Force | Out-Null
 
               Copy-Item `
                 -LiteralPath $_.FullName `
@@ -95,4 +83,75 @@ jobs:
       - name: Download MetaTrader 5
         shell: pwsh
         run: |
-          $
+          $ErrorActionPreference = 'Stop'
+
+          $Installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+
+          Invoke-WebRequest `
+            -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
+            -OutFile $Installer `
+            -UseBasicParsing
+
+          if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
+            throw 'MT5 installer was not downloaded.'
+          }
+
+          "INSTALLER=$Installer" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install and locate MetaTrader 5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $InstallRoot = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
+
+          New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+
+          $P = Start-Process `
+            -FilePath $env:INSTALLER `
+            -ArgumentList '/auto', "/path=$InstallRoot" `
+            -Wait `
+            -PassThru
+
+          Set-Content `
+            (Join-Path $env:EVIDENCE 'installer-exit-code.txt') `
+            ([string]$P.ExitCode) `
+            -Encoding utf8
+
+          Start-Sleep -Seconds 10
+
+          $Terminal = Get-ChildItem `
+            -Path $InstallRoot,'C:\Program Files','C:\Program Files (x86)' `
+            -Recurse `
+            -File `
+            -Filter 'terminal64.exe' `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($null -eq $Terminal) {
+            throw 'terminal64.exe was not found.'
+          }
+
+          $Editor = Get-ChildItem `
+            -Path $Terminal.Directory.FullName,'C:\Program Files','C:\Program Files (x86)' `
+            -Recurse `
+            -File `
+            -Filter 'metaeditor64.exe' `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($null -eq $Editor) {
+            throw 'metaeditor64.exe was not found.'
+          }
+
+          $MT5Root = $Terminal.Directory.FullName
+
+          "MT5ROOT=$MT5Root" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          "TERMINAL=$($Terminal.FullName)" |
+            Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+          "EDITOR=$($Editor.FullName)" |
+            Out-
