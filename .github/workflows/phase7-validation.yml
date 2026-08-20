@@ -13,6 +13,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
+
       - name: Checkout King's Bot
         uses: actions/checkout@v4
 
@@ -22,6 +23,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $Evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-artifacts'
+
           New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
 
           Set-Content `
@@ -29,37 +31,81 @@ jobs:
             -Value "Phase 7 started: $(Get-Date -Format o)" `
             -Encoding UTF8
 
-          "PHASE7_EVIDENCE=$Evidence" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "PHASE7_EVIDENCE=$Evidence" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding UTF8
 
-      - name: Verify King's Bot source
+      - name: Record repository contents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          Get-ChildItem `
+            $env:GITHUB_WORKSPACE `
+            -Recurse `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\'
+            } |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize |
+            Out-File `
+              (Join-Path $env:PHASE7_EVIDENCE 'repository-files.txt') `
+              -Encoding UTF8
+
+      - name: Locate King's Bot source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $Source = Get-ChildItem `
+          $Files = Get-ChildItem `
             $env:GITHUB_WORKSPACE `
             -Recurse `
             -File `
-            -Filter 'KingsBot_Phase6_Integration.mq5' `
             -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '\\.git\\' } |
+            Where-Object {
+              $_.FullName -notmatch '\\.git\\'
+            }
+
+          $Source = $Files |
+            Where-Object {
+              $_.Name -ieq 'KingsBot_Phase6_Integration.mq5'
+            } |
             Select-Object -First 1
 
           if (-not $Source) {
-            throw 'KingsBot_Phase6_Integration.mq5 was not found.'
+            $Source = $Files |
+              Where-Object {
+                $_.Extension -ieq '.mq5' -and
+                $_.Name -match 'KingsBot|King'
+              } |
+              Select-Object -First 1
           }
+
+          if (-not $Source) {
+            throw 'No KingsBot MQ5 source was found in the checked-out repository.'
+          }
+
+          "KINGSBOT_SOURCE=$($Source.FullName)" |
+            Out-File `
+              $env:GITHUB_ENV `
+              -Append `
+              -Encoding UTF8
 
           Copy-Item `
             $Source.FullName `
-            (Join-Path $env:PHASE7_EVIDENCE 'KingsBot_Phase6_Integration.mq5') `
+            (Join-Path $env:PHASE7_EVIDENCE $Source.Name) `
             -Force
 
           "Source=$($Source.FullName)" |
             Out-File `
               (Join-Path $env:PHASE7_EVIDENCE 'source-result.txt') `
-              -Encoding utf8
+              -Encoding UTF8
 
-      - name: Verify MetaQuotes network
+      - name: Verify MetaQuotes connectivity
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -73,7 +119,7 @@ jobs:
             Format-List |
             Out-File `
               (Join-Path $env:PHASE7_EVIDENCE 'network-test.txt') `
-              -Encoding utf8
+              -Encoding UTF8
 
           if (-not $Connection.TcpTestSucceeded) {
             throw 'HTTPS connectivity to download.mql5.com failed.'
@@ -84,7 +130,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $Installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          $Installer = Join-Path `
+            $env:RUNNER_TEMP `
+            'mt5setup.exe'
 
           $Url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
 
@@ -99,43 +147,4 @@ jobs:
           }
 
           $File = Get-Item $Installer
-          $Hash = Get-FileHash $Installer -Algorithm SHA256
-          $Signature = Get-AuthenticodeSignature $Installer
-
-          @(
-            "URL=$Url"
-            "Path=$Installer"
-            "SizeBytes=$($File.Length)"
-            "SHA256=$($Hash.Hash)"
-            "SignatureStatus=$($Signature.Status)"
-          ) |
-            Out-File `
-              (Join-Path $env:PHASE7_EVIDENCE 'mt5-installer.txt') `
-              -Encoding utf8
-
-          if ($File.Length -lt 100000) {
-            throw "MT5 installer is unexpectedly small: $($File.Length) bytes."
-          }
-
-          if ($Signature.Status -ne 'Valid') {
-            throw "MT5 installer signature is not valid: $($Signature.Status)"
-          }
-
-      - name: Install MT5
-        id: install_mt5
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-
-          # Deliberately use the known runner path.
-          # Do not depend on GITHUB_ENV for the installer path.
-          $Installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
-
-          $InstallRoot = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
-
-          $ResultFile = Join-Path `
-            $env:PHASE7_EVIDENCE `
-            'mt5-install-result.txt'
-
-         
+          $Hash = Get-
