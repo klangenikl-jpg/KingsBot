@@ -23,76 +23,102 @@ jobs:
           $Evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-artifacts'
           New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
           Set-Content -Path (Join-Path $Evidence 'phase7-started.txt') -Value 'Phase 7 started' -Encoding UTF8
-          'EVIDENCE=' + $Evidence | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+          'EVIDENCE=' + $Evidence | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
 
       - name: Locate King's Bot source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $Source = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Recurse -File -Filter 'KingsBot_Phase6_Integration.mq5' -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          $Source = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Recurse `
+            -File `
+            -Filter 'KingsBot_Phase6_Integration.mq5' `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
           if (-not $Source) {
             throw 'KingsBot_Phase6_Integration.mq5 was not found.'
           }
-          'SOURCE=' + $Source.FullName | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
-          Copy-Item -Path $Source.FullName -Destination $env:EVIDENCE -Force
+
+          'SOURCE=' + $Source.FullName | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+          Copy-Item $Source.FullName $env:EVIDENCE -Force
 
       - name: Download MT5 installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
           $Installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
           $Url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
-          Invoke-WebRequest -Uri $Url -OutFile $Installer -UseBasicParsing -TimeoutSec 180
-          if (-not (Test-Path -LiteralPath $Installer)) {
-            throw 'MT5 installer was not downloaded.'
+
+          Invoke-WebRequest `
+            -Uri $Url `
+            -OutFile $Installer `
+            -UseBasicParsing `
+            -TimeoutSec 180
+
+          if (-not (Test-Path $Installer)) {
+            throw 'MT5 installer download failed.'
           }
-          $File = Get-Item -LiteralPath $Installer
+
+          $File = Get-Item $Installer
           $Hash = Get-FileHash -Path $Installer -Algorithm SHA256
-          Set-Content -Path (Join-Path $env:EVIDENCE 'mt5-download.txt') -Value ('Size=' + $File.Length + [Environment]::NewLine + 'SHA256=' + $Hash.Hash) -Encoding UTF8
-          'INSTALLER=' + $Installer | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+
+          Set-Content `
+            -Path (Join-Path $env:EVIDENCE 'mt5-download.txt') `
+            -Value ('Size=' + $File.Length + [Environment]::NewLine + 'SHA256=' + $Hash.Hash) `
+            -Encoding UTF8
+
+          'INSTALLER=' + $Installer | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
 
       - name: Install MT5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+
           $InstallRoot = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
-          Remove-Item -Path $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+          Remove-Item $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 
-          $Process = Start-Process -FilePath $env:INSTALLER -ArgumentList '/auto',('/path=' + $InstallRoot) -Wait -PassThru
+          $Process = Start-Process `
+            -FilePath $env:INSTALLER `
+            -ArgumentList '/auto',('/path=' + $InstallRoot) `
+            -Wait `
+            -PassThru
 
-          Set-Content -Path (Join-Path $env:EVIDENCE 'mt5-installer-exit-code.txt') -Value $Process.ExitCode -Encoding UTF8
+          Set-Content `
+            -Path (Join-Path $env:EVIDENCE 'mt5-installer-exit-code.txt') `
+            -Value $Process.ExitCode `
+            -Encoding UTF8
 
-          $Terminal = Get-ChildItem -Path $InstallRoot -Recurse -File -Filter 'terminal64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          $Editor = Get-ChildItem -Path $InstallRoot -Recurse -File -Filter 'metaeditor64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $Terminal = Get-ChildItem `
+            -Path $env:RUNNER_TEMP `
+            -Recurse `
+            -File `
+            -Filter 'terminal64.exe' `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          $Editor = Get-ChildItem `
+            -Path $env:RUNNER_TEMP `
+            -Recurse `
+            -File `
+            -Filter 'metaeditor64.exe' `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
           if (-not $Terminal) {
-            throw 'MT5 terminal64.exe was not installed.'
+            $Terminal = Get-ChildItem `
+              -Path 'C:\Program Files' `
+              -Recurse `
+              -File `
+              -Filter 'terminal64.exe' `
+              -ErrorAction SilentlyContinue |
+              Select-Object -First 1
           }
 
           if (-not $Editor) {
-            throw 'MT5 metaeditor64.exe was not installed.'
-          }
-
-          'MT5_ROOT=' + $InstallRoot | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
-          'TERMINAL=' + $Terminal.FullName | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
-          'EDITOR=' + $Editor.FullName | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
-
-      - name: Upload installation evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: KingsBot-Phase7-Installation-${{ github.run_number }}
-          path: ${{ github.workspace }}/phase7-artifacts
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Prepare King's Bot
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $Target = Join-Path $env:MT5_ROOT 'MQL5\Experts\KingsBot'
-          New-Item -ItemType Directory -Path $Target -Force | Out-Null
-          $SourceDir = Split-Path -Path $env:SOURCE -Parent
-          Copy-Item -Path (Join-Path $SourceDir '*') -Destination $Target -Recurse -Force
-          $CompileSource = Join-Path $Target 'KingsBot_Phase6_Integration.mq5
+            $Editor
