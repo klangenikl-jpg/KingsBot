@@ -43,7 +43,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
 
           Get-ChildItem `
-            $env:GITHUB_WORKSPACE `
+            -Path $env:GITHUB_WORKSPACE `
             -Recurse `
             -File `
             -ErrorAction SilentlyContinue |
@@ -53,7 +53,7 @@ jobs:
             Select-Object FullName, Length |
             Format-Table -AutoSize |
             Out-File `
-              (Join-Path $env:PHASE7_EVIDENCE 'repository-files.txt') `
+              -FilePath (Join-Path $env:PHASE7_EVIDENCE 'repository-files.txt') `
               -Encoding UTF8
 
       - name: Locate King's Bot source
@@ -62,7 +62,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $Files = Get-ChildItem `
-            $env:GITHUB_WORKSPACE `
+            -Path $env:GITHUB_WORKSPACE `
             -Recurse `
             -File `
             -ErrorAction SilentlyContinue |
@@ -91,18 +91,18 @@ jobs:
 
           "KINGSBOT_SOURCE=$($Source.FullName)" |
             Out-File `
-              $env:GITHUB_ENV `
+              -FilePath $env:GITHUB_ENV `
               -Append `
               -Encoding UTF8
 
           Copy-Item `
-            $Source.FullName `
-            (Join-Path $env:PHASE7_EVIDENCE $Source.Name) `
+            -Path $Source.FullName `
+            -Destination (Join-Path $env:PHASE7_EVIDENCE $Source.Name) `
             -Force
 
           "Source=$($Source.FullName)" |
             Out-File `
-              (Join-Path $env:PHASE7_EVIDENCE 'source-result.txt') `
+              -FilePath (Join-Path $env:PHASE7_EVIDENCE 'source-result.txt') `
               -Encoding UTF8
 
       - name: Verify MetaQuotes connectivity
@@ -118,7 +118,7 @@ jobs:
           $Connection |
             Format-List |
             Out-File `
-              (Join-Path $env:PHASE7_EVIDENCE 'network-test.txt') `
+              -FilePath (Join-Path $env:PHASE7_EVIDENCE 'network-test.txt') `
               -Encoding UTF8
 
           if (-not $Connection.TcpTestSucceeded) {
@@ -142,9 +142,12 @@ jobs:
             -UseBasicParsing `
             -TimeoutSec 180
 
-          if (-not (Test-Path $Installer)) {
+          if (-not (Test-Path -LiteralPath $Installer)) {
             throw 'MT5 installer was not downloaded.'
           }
 
-          $File = Get-Item $Installer
-          $Hash = Get-
+          $File = Get-Item -LiteralPath $Installer
+          $Hash = Get-FileHash -Path $Installer -Algorithm SHA256
+          $Signature = Get-AuthenticodeSignature -FilePath $Installer
+
+          @
