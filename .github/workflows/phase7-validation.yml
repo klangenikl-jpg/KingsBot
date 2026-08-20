@@ -16,216 +16,103 @@ jobs:
       - name: Checkout King's Bot
         uses: actions/checkout@v4
 
-      - name: Prepare validation directory
+      - name: Prepare evidence directory
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
           $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-validation-evidence'
 
-          New-Item `
-            -ItemType Directory `
-            -Path $evidence `
-            -Force |
-            Out-Null
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 
           Write-Host "Evidence directory: $evidence"
 
-      - name: Preflight Windows and MetaQuotes network
+      - name: Verify Windows environment
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          Write-Host '===== PHASE 7 PREFLIGHT ====='
+          Write-Host '===== WINDOWS ENVIRONMENT ====='
 
           Get-CimInstance Win32_OperatingSystem |
             Select-Object Caption, Version, BuildNumber, OSArchitecture |
             Format-List
 
-          Write-Host 'PowerShell:'
-          $PSVersionTable |
-            Format-List
+          Write-Host '================================'
+
+      - name: Verify MetaQuotes connectivity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
 
           $hostName = 'download.mql5.com'
 
           Write-Host "Resolving $hostName..."
 
-          Resolve-DnsName `
-            $hostName `
-            -ErrorAction Stop |
+          Resolve-DnsName $hostName -ErrorAction Stop |
             Select-Object -First 5 |
             Format-Table
 
-          Write-Host 'Testing HTTPS connectivity...'
+          Write-Host 'Testing TCP 443...'
 
           $connection = Test-NetConnection `
-            $hostName `
+            -ComputerName $hostName `
             -Port 443 `
             -WarningAction SilentlyContinue
 
           if (-not $connection.TcpTestSucceeded) {
-            throw "Cannot establish HTTPS connectivity to $hostName on port 443."
+            throw "HTTPS connectivity to $hostName failed."
           }
 
-          Write-Host 'HTTPS connectivity verified.'
-          Write-Host '============================'
+          Write-Host 'MetaQuotes HTTPS connectivity confirmed.'
 
-      - name: Download and validate MT5 installer
+      - name: Download MT5 installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $installer = Join-Path `
-            $env:RUNNER_TEMP `
-            'mt5setup.exe'
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
           $uri = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
 
-          Remove-Item `
-            $installer `
-            -Force `
-            -ErrorAction SilentlyContinue
+          Remove-Item $installer -Force -ErrorAction SilentlyContinue
 
-          $downloaded = $false
+          Write-Host "Downloading:"
+          Write-Host $uri
 
-          for ($attempt = 1; $attempt -le 3; $attempt++) {
+          Invoke-WebRequest `
+            -Uri $uri `
+            -OutFile $installer `
+            -UseBasicParsing `
+            -TimeoutSec 180
 
-            try {
-
-              Write-Host "Downloading MT5 installer - attempt $attempt of 3"
-
-              Invoke-WebRequest `
-                -Uri $uri `
-                -OutFile $installer `
-                -UseBasicParsing `
-                -TimeoutSec 180
-
-              if (Test-Path $installer) {
-
-                $size = (Get-Item $installer).Length
-
-                Write-Host "Downloaded installer size: $size bytes"
-
-                if ($size -ge 100000) {
-                  $downloaded = $true
-                  break
-                }
-
-                Write-Warning 'Downloaded file is unexpectedly small.'
-              }
-
-            }
-            catch {
-
-              Write-Warning `
-                "Download attempt $attempt failed: $($_.Exception.Message)"
-            }
-
-            Remove-Item `
-              $installer `
-              -Force `
-              -ErrorAction SilentlyContinue
-
-            if ($attempt -lt 3) {
-              Start-Sleep -Seconds 5
-            }
+          if (-not (Test-Path $installer)) {
+            throw 'MT5 installer was not downloaded.'
           }
 
-          if (-not $downloaded) {
-            throw 'MT5 installer could not be downloaded as a valid executable after three attempts.'
+          $info = Get-Item $installer
+
+          Write-Host "Installer size: $($info.Length) bytes"
+
+          if ($info.Length -lt 100000) {
+            throw "Downloaded MT5 installer is invalid or incomplete. Size: $($info.Length) bytes"
           }
 
-          Write-Host 'Checking downloaded executable signature...'
+          $hash = Get-FileHash $installer -Algorithm SHA256
+
+          $hash |
+            Format-List |
+            Out-File `
+              "$env:GITHUB_WORKSPACE\phase7-validation-evidence\mt5-installer-sha256.txt"
 
           $signature = Get-AuthenticodeSignature $installer
 
-          Write-Host "Signature status: $($signature.Status)"
-
-          if ($signature.SignerCertificate) {
-            Write-Host "Signer: $($signature.SignerCertificate.Subject)"
-          }
-
-          # Record the signature result, but do not reject the installer solely
-          # because the ephemeral runner cannot build the certificate chain.
           $signature |
             Format-List * |
             Out-File `
               "$env:GITHUB_WORKSPACE\phase7-validation-evidence\mt5-installer-signature.txt"
 
-          Get-FileHash `
-            $installer `
-            -Algorithm SHA256 |
-            Format-List |
-            Out-File `
-              "$env:GITHUB_WORKSPACE\phase7-validation-evidence\mt5-installer-sha256.txt"
+          Write-Host "Signature status: $($signature.Status)"
 
-          Copy-Item `
-            $installer `
-            "$env:GITHUB_WORKSPACE\phase7-validation-evidence\mt5setup.exe" `
-            -Force
-
-          Write-Host 'MT5 installer downloaded and validated.'
-
-      - name: Install MT5
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $installer = Join-Path `
-            $env:RUNNER_TEMP `
-            'mt5setup.exe'
-
-          $installRoot = Join-Path `
-            $env:RUNNER_TEMP `
-            'KingsBot-MT5'
-
-          Remove-Item `
-            $installRoot `
-            -Recurse `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-          New-Item `
-            -ItemType Directory `
-            -Path $installRoot `
-            -Force |
-            Out-Null
-
-          # Official MetaQuotes unattended installation syntax:
-          # mt5setup.exe /auto /path:"C:\desired\directory"
-
-          $arguments = @(
-            '/auto',
-            "/path:`"$installRoot`""
-          )
-
-          Write-Host '===== MT5 INSTALL ====='
-          Write-Host "Installer : $installer"
-          Write-Host "Target    : $installRoot"
-          Write-Host "Arguments : $($arguments -join ' ')"
-          Write-Host '========================'
-
-          $startTime = Get-Date
-
-          $process = Start-Process `
-            -FilePath $installer `
-            -ArgumentList $arguments `
-            -WorkingDirectory $env:RUNNER_TEMP `
-            -Wait `
-            -PassThru
-
-          $duration = ((Get-Date) - $startTime).TotalSeconds
-
-          Write-Host "Installer exit code: $($process.ExitCode)"
-          Write-Host "Installer duration : $([math]::Round($duration,2)) seconds"
-
-          @"
-          Installer: $installer
-          Target: $installRoot
-          ExitCode: $($process.ExitCode)
-          DurationSeconds: $([math]::Round($duration,2))
-          Arguments: $($arguments -join ' ')
-          "@ |
-            Set-Content `
-              "$env:GITHUB_WORKSPACE\phase7-validation-evidence\mt5-install-result.txt" `
-              -Encoding UTF8
+          "Installer=$installer" |
+            Out-File $env:GITHUB_ENV -Append -
