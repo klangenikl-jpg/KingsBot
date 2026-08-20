@@ -13,68 +13,108 @@ jobs:
     timeout-minutes: 60
 
     steps:
+
       - name: Checkout King's Bot
         uses: actions/checkout@v4
 
-      - name: Prepare evidence directory
+      - name: Create Phase 7 artifact directory
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $evidence = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            'phase7-validation-evidence'
+          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE 'phase7-artifacts'
 
           New-Item `
             -ItemType Directory `
-            -Path $evidence `
+            -Path $artifactRoot `
             -Force |
             Out-Null
 
-          Write-Host "Evidence directory: $evidence"
+          Set-Content `
+            -Path (Join-Path $artifactRoot 'phase7-start.txt') `
+            -Value "Phase 7 started: $(Get-Date -Format o)" `
+            -Encoding UTF8
+
+      - name: Verify King's Bot source tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $required = @(
+            'KingsBot_Phase6_Integration.mq5',
+            'KB_StrategySignal.mqh',
+            'KingsBot_Strategy_Swing.mqh',
+            'KingsBot_Strategy_Structure.mqh',
+            'KingsBot_Strategy_Liquidity.mqh',
+            'KingsBot_Strategy_OrderBlock.mqh',
+            'KingsBot_Strategy_FVG.mqh',
+            'KingsBot_DecisionEngine.mqh',
+            'KingsBot_RiskManager.mqh'
+          )
+
+          $missing = @()
+
+          foreach ($name in $required) {
+            $path = Join-Path $env:GITHUB_WORKSPACE $name
+
+            if (-not (Test-Path $path)) {
+              $missing += $name
+            }
+            else {
+              Write-Host "FOUND: $name"
+            }
+          }
+
+          if ($missing.Count -gt 0) {
+            throw "Required King's Bot source files are missing: $($missing -join ', ')"
+          }
+
+          Copy-Item `
+            (Join-Path $env:GITHUB_WORKSPACE 'KingsBot_Phase6_Integration.mq5') `
+            (Join-Path $env:GITHUB_WORKSPACE 'phase7-artifacts\KingsBot_Phase6_Integration.mq5') `
+            -Force
 
       - name: Verify Windows environment
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          Write-Host '===== WINDOWS ENVIRONMENT ====='
-
           Get-CimInstance Win32_OperatingSystem |
             Select-Object Caption, Version, BuildNumber, OSArchitecture |
-            Format-List
+            Format-List |
+            Out-File `
+              "$env:GITHUB_WORKSPACE\phase7-artifacts\windows-environment.txt" `
+              -Encoding UTF8
 
-          Write-Host '================================'
-
-      - name: Verify MetaQuotes connectivity
+      - name: Verify MetaQuotes network
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $hostName = 'download.mql5.com'
-
-          Write-Host "Resolving $hostName..."
-
           Resolve-DnsName `
-            $hostName `
+            download.mql5.com `
             -ErrorAction Stop |
-            Select-Object -First 5 |
-            Format-Table
+            Select-Object -First 10 |
+            Out-File `
+              "$env:GITHUB_WORKSPACE\phase7-artifacts\metaquotes-dns.txt" `
+              -Encoding UTF8
 
-          Write-Host 'Testing TCP 443...'
-
-          $connection = Test-NetConnection `
-            -ComputerName $hostName `
+          $test = Test-NetConnection `
+            download.mql5.com `
             -Port 443 `
             -WarningAction SilentlyContinue
 
-          if (-not $connection.TcpTestSucceeded) {
-            throw "HTTPS connectivity to $hostName failed."
+          $test |
+            Format-List |
+            Out-File `
+              "$env:GITHUB_WORKSPACE\phase7-artifacts\metaquotes-network.txt" `
+              -Encoding UTF8
+
+          if (-not $test.TcpTestSucceeded) {
+            throw 'HTTPS connection to download.mql5.com failed.'
           }
 
-          Write-Host 'MetaQuotes HTTPS connectivity confirmed.'
-
-      - name: Download MT5 installer
+      - name: Download and validate MT5 installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -83,18 +123,10 @@ jobs:
             $env:RUNNER_TEMP `
             'mt5setup.exe'
 
-          $uri = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
-
-          Remove-Item `
-            $installer `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-          Write-Host 'Downloading MT5 installer:'
-          Write-Host $uri
+          $url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
 
           Invoke-WebRequest `
-            -Uri $uri `
+            -Uri $url `
             -OutFile $installer `
             -UseBasicParsing `
             -TimeoutSec 180
@@ -103,100 +135,81 @@ jobs:
             throw 'MT5 installer was not downloaded.'
           }
 
-          $info = Get-Item $installer
+          $file = Get-Item $installer
 
-          Write-Host "Installer size: $($info.Length) bytes"
-
-          if ($info.Length -lt 100000) {
-            throw "Downloaded MT5 installer is invalid or incomplete. Size: $($info.Length) bytes"
+          if ($file.Length -lt 100000) {
+            throw "MT5 installer is unexpectedly small: $($file.Length) bytes"
           }
 
           $hash = Get-FileHash `
             $installer `
             -Algorithm SHA256
 
-          $hash |
-            Format-List |
-            Out-File `
-              "$env:GITHUB_WORKSPACE\phase7-validation-evidence\mt5-installer-sha256.txt"
-
           $signature = Get-AuthenticodeSignature `
             $installer
 
-          $signature |
-            Format-List * |
-            Out-File `
-              "$env:GITHUB_WORKSPACE\phase7-validation-evidence\mt5-installer-signature.txt"
+          "URL=$url" |
+            Set-Content `
+              "$env:GITHUB_WORKSPACE\phase7-artifacts\mt5-installer.txt" `
+              -Encoding UTF8
 
-          Write-Host "Signature status: $($signature.Status)"
+          "SizeBytes=$($file.Length)" |
+            Add-Content `
+              "$env:GITHUB_WORKSPACE\phase7-artifacts\mt5-installer.txt"
 
-          # FIXED: do not use the broken/truncated Out-File command.
+          "SHA256=$($hash.Hash)" |
+            Add-Content `
+              "$env:GITHUB_WORKSPACE\phase7-artifacts\mt5-installer.txt"
+
+          "SignatureStatus=$($signature.Status)" |
+            Add-Content `
+              "$env:GITHUB_WORKSPACE\phase7-artifacts\mt5-installer.txt"
+
+          if ($signature.Status -ne 'Valid') {
+            throw "MT5 installer signature is not valid: $($signature.Status)"
+          }
+
           Add-Content `
             -Path $env:GITHUB_ENV `
-            -Value "Installer=$installer"
+            -Value "MT5_INSTALLER=$installer"
 
-          Write-Host "Installer environment variable exported."
+          Write-Host "MT5 installer validated: $($file.Length) bytes"
 
-      - name: Install MT5 with diagnostics
+      - name: Install MT5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $installer = $env:Installer
-
-          if (-not $installer) {
-            throw 'Installer environment variable was not set.'
-          }
+          $installer = $env:MT5_INSTALLER
 
           if (-not (Test-Path $installer)) {
-            throw "MT5 installer does not exist: $installer"
+            throw "MT5 installer not found: $installer"
           }
 
-          $installRoot = Join-Path `
+          $mt5Root = Join-Path `
             $env:RUNNER_TEMP `
             'KingsBot-MT5'
 
           Remove-Item `
-            $installRoot `
+            $mt5Root `
             -Recurse `
             -Force `
             -ErrorAction SilentlyContinue
 
           New-Item `
             -ItemType Directory `
-            -Path $installRoot `
+            -Path $mt5Root `
             -Force |
             Out-Null
 
-          $resultFile = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            'phase7-validation-evidence\mt5-install-result.txt'
-
-          Write-Host '========================================'
-          Write-Host 'MT5 INSTALLATION'
-          Write-Host '========================================'
-          Write-Host "Installer : $installer"
-          Write-Host "Target    : $installRoot"
-          Write-Host 'Arguments : /auto /path:"<target>"'
-          Write-Host '========================================'
-
-          $startTime = Get-Date
+          $start = Get-Date
 
           $process = Start-Process `
             -FilePath $installer `
             -ArgumentList @(
               '/auto',
-              "/path:`"$installRoot`""
+              "/path:$mt5Root"
             ) `
             -WorkingDirectory $env:RUNNER_TEMP `
             -Wait `
             -PassThru
-
-          $duration = ((Get-Date) - $startTime).TotalSeconds
-
-          @"
-          Installer: $installer
-          InstallRoot: $installRoot
-          ExitCode: $($process.ExitCode)
-          DurationSeconds: $([math]::Round($duration, 2))
-          Arguments
