@@ -22,7 +22,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $Evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-artifacts'
           New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
-          Set-Content (Join-Path $Evidence 'phase7-started.txt') 'Phase 7 started' -Encoding UTF8
+          Set-Content -Path (Join-Path $Evidence 'phase7-started.txt') -Value 'Phase 7 started' -Encoding UTF8
           'EVIDENCE=' + $Evidence | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
 
       - name: Find source
@@ -43,4 +43,62 @@ jobs:
           if (-not (Test-Path $Installer)) { throw 'MT5 download failed.' }
           $Hash = Get-FileHash -Path $Installer -Algorithm SHA256
           Set-Content (Join-Path $env:EVIDENCE 'mt5-download.txt') ('SHA256=' + $Hash.Hash) -Encoding UTF8
-          'INSTALLER=' + $Installer | Out-File $
+          'INSTALLER=' + $Installer | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+
+      - name: Install MT5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $Root = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
+          Remove-Item $Root -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $Root -Force | Out-Null
+          $P = Start-Process $env:INSTALLER -ArgumentList '/auto',('/path=' + $Root) -Wait -PassThru
+          Set-Content (Join-Path $env:EVIDENCE 'installer-exit-code.txt') $P.ExitCode -Encoding UTF8
+          Start-Sleep -Seconds 5
+          $T = Get-ChildItem $env:RUNNER_TEMP -Recurse -File -Filter 'terminal64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $E = Get-ChildItem $env:RUNNER_TEMP -Recurse -File -Filter 'metaeditor64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($null -eq $T) { $T = Get-ChildItem 'C:\Program Files' -Recurse -File -Filter 'terminal64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if ($null -eq $E) { $E = Get-ChildItem 'C:\Program Files' -Recurse -File -Filter 'metaeditor64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if ($null -eq $T) { throw 'terminal64.exe not found.' }
+          if ($null -eq $E) { throw 'metaeditor64.exe not found.' }
+          'TERMINAL=' + $T.FullName | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+          'EDITOR=' + $E.FullName | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+          'MT5ROOT=' + $T.Directory.FullName | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+          Set-Content (Join-Path $env:EVIDENCE 'mt5-location.txt') ('Terminal=' + $T.FullName + [Environment]::NewLine + 'MetaEditor=' + $E.FullName) -Encoding UTF8
+
+      - name: Prepare source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Target = Join-Path $env:MT5ROOT 'MQL5\Experts\KingsBot'
+          New-Item -ItemType Directory -Path $Target -Force | Out-Null
+          Copy-Item (Split-Path $env:SOURCE -Parent)\* $Target -Recurse -Force
+          $Compile = Join-Path $Target 'KingsBot_Phase6_Integration.mq5'
+          if (-not (Test-Path $Compile)) { throw 'Prepared MQ5 file not found.' }
+          'COMPILE=' + $Compile | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+
+      - name: Compile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $P = Start-Process $env:EDITOR -ArgumentList ('/compile:' + $env:COMPILE),'/log' -Wait -PassThru
+          Set-Content (Join-Path $env:EVIDENCE 'compile-exit-code.txt') $P.ExitCode -Encoding UTF8
+          $EX5 = [System.IO.Path]::ChangeExtension($env:COMPILE,'.ex5')
+          if (-not (Test-Path $EX5)) { throw 'EX5 was not produced.' }
+          Copy-Item $EX5 $env:EVIDENCE -Force
+
+      - name: Create tester configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $Config = Join-Path $env:MT5ROOT 'KingsBot_Phase7_Tester.ini'
+          Set-Content $Config '[Tester]','Expert=KingsBot\KingsBot_Phase6_Integration.ex5','Symbol=EURUSD','Period=M15','Model=1','Optimization=0','FromDate=2026.01.01','ToDate=2026.08.01','ForwardMode=0','Deposit=10000','Currency=USD','Leverage=1:100','Visual=0','ReplaceReport=1','Report=KingsBot_Phase7_Tester','ShutdownTerminal=1' -Encoding ASCII
+          Copy-Item $Config $env:EVIDENCE -Force
+          'CONFIG=' + $Config | Out-File $env:GITHUB_ENV -Append -Encoding UTF8
+
+      - name: Run tester
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $P = Start-Process $env
