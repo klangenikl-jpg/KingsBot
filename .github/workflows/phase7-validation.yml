@@ -21,9 +21,15 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-validation-evidence'
+          $evidence = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'phase7-validation-evidence'
 
-          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Path $evidence `
+            -Force |
+            Out-Null
 
           Write-Host "Evidence directory: $evidence"
 
@@ -49,7 +55,9 @@ jobs:
 
           Write-Host "Resolving $hostName..."
 
-          Resolve-DnsName $hostName -ErrorAction Stop |
+          Resolve-DnsName `
+            $hostName `
+            -ErrorAction Stop |
             Select-Object -First 5 |
             Format-Table
 
@@ -71,13 +79,18 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          $installer = Join-Path `
+            $env:RUNNER_TEMP `
+            'mt5setup.exe'
 
           $uri = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
 
-          Remove-Item $installer -Force -ErrorAction SilentlyContinue
+          Remove-Item `
+            $installer `
+            -Force `
+            -ErrorAction SilentlyContinue
 
-          Write-Host "Downloading:"
+          Write-Host 'Downloading MT5 installer:'
           Write-Host $uri
 
           Invoke-WebRequest `
@@ -98,14 +111,17 @@ jobs:
             throw "Downloaded MT5 installer is invalid or incomplete. Size: $($info.Length) bytes"
           }
 
-          $hash = Get-FileHash $installer -Algorithm SHA256
+          $hash = Get-FileHash `
+            $installer `
+            -Algorithm SHA256
 
           $hash |
             Format-List |
             Out-File `
               "$env:GITHUB_WORKSPACE\phase7-validation-evidence\mt5-installer-sha256.txt"
 
-          $signature = Get-AuthenticodeSignature $installer
+          $signature = Get-AuthenticodeSignature `
+            $installer
 
           $signature |
             Format-List * |
@@ -114,5 +130,73 @@ jobs:
 
           Write-Host "Signature status: $($signature.Status)"
 
-          "Installer=$installer" |
-            Out-File $env:GITHUB_ENV -Append -
+          # FIXED: do not use the broken/truncated Out-File command.
+          Add-Content `
+            -Path $env:GITHUB_ENV `
+            -Value "Installer=$installer"
+
+          Write-Host "Installer environment variable exported."
+
+      - name: Install MT5 with diagnostics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $installer = $env:Installer
+
+          if (-not $installer) {
+            throw 'Installer environment variable was not set.'
+          }
+
+          if (-not (Test-Path $installer)) {
+            throw "MT5 installer does not exist: $installer"
+          }
+
+          $installRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            'KingsBot-MT5'
+
+          Remove-Item `
+            $installRoot `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          New-Item `
+            -ItemType Directory `
+            -Path $installRoot `
+            -Force |
+            Out-Null
+
+          $resultFile = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'phase7-validation-evidence\mt5-install-result.txt'
+
+          Write-Host '========================================'
+          Write-Host 'MT5 INSTALLATION'
+          Write-Host '========================================'
+          Write-Host "Installer : $installer"
+          Write-Host "Target    : $installRoot"
+          Write-Host 'Arguments : /auto /path:"<target>"'
+          Write-Host '========================================'
+
+          $startTime = Get-Date
+
+          $process = Start-Process `
+            -FilePath $installer `
+            -ArgumentList @(
+              '/auto',
+              "/path:`"$installRoot`""
+            ) `
+            -WorkingDirectory $env:RUNNER_TEMP `
+            -Wait `
+            -PassThru
+
+          $duration = ((Get-Date) - $startTime).TotalSeconds
+
+          @"
+          Installer: $installer
+          InstallRoot: $installRoot
+          ExitCode: $($process.ExitCode)
+          DurationSeconds: $([math]::Round($duration, 2))
+          Arguments
