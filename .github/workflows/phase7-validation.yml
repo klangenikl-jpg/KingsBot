@@ -8,52 +8,77 @@ permissions:
 
 jobs:
   phase7:
-    name: Phase 7 Runtime and Strategy Tester Validation
+    name: Phase 7 Runtime Validation
     runs-on: windows-2022
     timeout-minutes: 60
 
     env:
       BOT_SOURCE: KingsBot_Phase6_Integration.mq5
       BOT_EX5: KingsBot_Phase6_Integration.ex5
-      BOT_DIR: KingsBot
-      TEST_SYMBOL: EURUSD
-      TEST_PERIOD: M15
+      BOT_FOLDER: KingsBot
+      SYMBOL: EURUSD
+      PERIOD: M15
 
     steps:
 
+      # ------------------------------------------------------------
+      # 1. CHECKOUT
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Initialize evidence
+      # ------------------------------------------------------------
+      # 2. INITIALIZE
+      # ------------------------------------------------------------
+      - name: Initialize evidence directory
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $Evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-artifacts'
+          $Evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
 
-          New-Item -ItemType Directory -Path $Evidence -Force | Out-Null
-
-          "Phase 7 started: $(Get-Date -Format o)" |
-            Set-Content -LiteralPath (Join-Path $Evidence 'phase7-started.txt') -Encoding UTF8
+          New-Item `
+            -ItemType Directory `
+            -Path $Evidence `
+            -Force | Out-Null
 
           "EVIDENCE=$Evidence" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
-      - name: Locate source
+          "Phase 7 started: $(Get-Date -Format o)" |
+            Set-Content `
+              -LiteralPath (Join-Path $Evidence 'phase7-started.txt') `
+              -Encoding utf8
+
+      # ------------------------------------------------------------
+      # 3. FIND SOURCE
+      # ------------------------------------------------------------
+      - name: Locate King's Bot source
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $Source = Join-Path $env:GITHUB_WORKSPACE $env:BOT_SOURCE
+          $Source = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            $env:BOT_SOURCE
 
           if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) {
             throw "Source file not found: $Source"
           }
 
           "SOURCE=$Source" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
-          Copy-Item -LiteralPath $Source -Destination $env:EVIDENCE -Force
+          Copy-Item `
+            -LiteralPath $Source `
+            -Destination $env:EVIDENCE `
+            -Force
 
           Get-ChildItem `
             -LiteralPath $env:GITHUB_WORKSPACE `
@@ -61,20 +86,23 @@ jobs:
             -Filter '*.mqh' `
             -ErrorAction SilentlyContinue |
             ForEach-Object {
-              Copy-Item -LiteralPath $_.FullName -Destination $env:EVIDENCE -Force
+              Copy-Item `
+                -LiteralPath $_.FullName `
+                -Destination $env:EVIDENCE `
+                -Force
             }
 
-          Set-Content `
-            -LiteralPath (Join-Path $env:EVIDENCE 'source-location.txt') `
-            -Value $Source `
-            -Encoding UTF8
-
+      # ------------------------------------------------------------
+      # 4. DOWNLOAD MT5
+      # ------------------------------------------------------------
       - name: Download MetaTrader 5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $Installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          $Installer = Join-Path `
+            $env:RUNNER_TEMP `
+            'mt5setup.exe'
 
           Invoke-WebRequest `
             -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
@@ -82,32 +110,51 @@ jobs:
             -UseBasicParsing
 
           if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
-            throw 'MT5 installer download failed.'
+            throw 'MetaTrader 5 installer was not downloaded.'
           }
 
           "INSTALLER=$Installer" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
-      - name: Install and locate MT5
+      # ------------------------------------------------------------
+      # 5. INSTALL / LOCATE MT5
+      # ------------------------------------------------------------
+      - name: Install and locate MetaTrader 5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $InstallRoot = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
+          $InstallRoot = Join-Path `
+            $env:RUNNER_TEMP `
+            'KingsBot-MT5'
 
-          Remove-Item -LiteralPath $InstallRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
+          Remove-Item `
+            -LiteralPath $InstallRoot `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
 
-          $P = Start-Process `
+          New-Item `
+            -ItemType Directory `
+            -Path $InstallRoot `
+            -Force | Out-Null
+
+          $InstallProcess = Start-Process `
             -FilePath $env:INSTALLER `
-            -ArgumentList '/auto', "/path=$InstallRoot" `
+            -ArgumentList @(
+              '/auto',
+              "/path=$InstallRoot"
+            ) `
             -Wait `
             -PassThru
 
           Set-Content `
-            -LiteralPath (Join-Path $env:EVIDENCE 'mt5-installer-exit-code.txt') `
-            -Value $P.ExitCode `
-            -Encoding UTF8
+            -LiteralPath (Join-Path $env:EVIDENCE 'mt5-installer-exit.txt') `
+            -Value ([string]$InstallProcess.ExitCode) `
+            -Encoding utf8
 
           Start-Sleep -Seconds 10
 
@@ -164,52 +211,62 @@ jobs:
           }
 
           if ($null -eq $Editor) {
-            $Editor = Get-ChildItem `
-              -Path 'C:\Program Files (x86)' `
-              -Recurse `
-              -File `
-              -Filter 'metaeditor64.exe' `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-          }
-
-          if ($null -eq $Editor) {
             throw 'metaeditor64.exe was not found.'
           }
 
           "MT5ROOT=$TerminalRoot" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
           "TERMINAL=$($Terminal.FullName)" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
           "EDITOR=$($Editor.FullName)" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
-          Set-Content `
-            -LiteralPath (Join-Path $env:EVIDENCE 'mt5-location.txt') `
-            -Value @(
-              "MT5ROOT=$TerminalRoot"
-              "TERMINAL=$($Terminal.FullName)"
-              "EDITOR=$($Editor.FullName)"
-            ) `
-            -Encoding UTF8
+          @(
+            "MT5ROOT=$TerminalRoot"
+            "TERMINAL=$($Terminal.FullName)"
+            "EDITOR=$($Editor.FullName)"
+          ) |
+            Set-Content `
+              -LiteralPath (Join-Path $env:EVIDENCE 'mt5-location.txt') `
+              -Encoding utf8
 
-      - name: Prepare source tree
+      # ------------------------------------------------------------
+      # 6. PREPARE SOURCE
+      # ------------------------------------------------------------
+      - name: Prepare King's Bot source tree
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $Target = Join-Path $env:MT5ROOT 'MQL5\Experts\KingsBot'
+          $Target = Join-Path `
+            $env:MT5ROOT `
+            'MQL5\Experts\KingsBot'
 
-          New-Item -ItemType Directory -Path $Target -Force | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Path $Target `
+            -Force | Out-Null
 
           Get-ChildItem `
             -LiteralPath $env:GITHUB_WORKSPACE `
             -File `
             -Filter '*.mq5' |
             ForEach-Object {
-              Copy-Item -LiteralPath $_.FullName -Destination $Target -Force
+              Copy-Item `
+                -LiteralPath $_.FullName `
+                -Destination $Target `
+                -Force
             }
 
           Get-ChildItem `
@@ -218,60 +275,71 @@ jobs:
             -Filter '*.mqh' `
             -ErrorAction SilentlyContinue |
             ForEach-Object {
-              Copy-Item -LiteralPath $_.FullName -Destination $Target -Force
+              Copy-Item `
+                -LiteralPath $_.FullName `
+                -Destination $Target `
+                -Force
             }
 
-          $Compile = Join-Path $Target $env:BOT_SOURCE
+          $CompileFile = Join-Path `
+            $Target `
+            $env:BOT_SOURCE
 
-          if (-not (Test-Path -LiteralPath $Compile -PathType Leaf)) {
-            throw "Prepared source missing: $Compile"
+          if (-not (Test-Path -LiteralPath $CompileFile -PathType Leaf)) {
+            throw "Prepared source does not exist: $CompileFile"
           }
 
-          "COMPILE=$Compile" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding UTF8
+          "COMPILE=$CompileFile" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
 
-          Get-ChildItem -LiteralPath $Target -File |
-            Select-Object Name,Length,FullName |
+          Get-ChildItem `
+            -LiteralPath $Target `
+            -File |
+            Select-Object Name, Length, FullName |
             Format-Table -AutoSize |
             Out-String |
             Set-Content `
               -LiteralPath (Join-Path $env:EVIDENCE 'source-inventory.txt') `
-              -Encoding UTF8
+              -Encoding utf8
 
+      # ------------------------------------------------------------
+      # 7. COMPILE
+      # ------------------------------------------------------------
       - name: Compile King's Bot
+        id: compile
         shell: pwsh
         continue-on-error: true
         run: |
           $ErrorActionPreference = 'Continue'
 
-          $Log = Join-Path $env:EVIDENCE 'metaeditor-compile.log'
-          $Err = Join-Path $env:EVIDENCE 'metaeditor-compile-error.log'
+          $CompileLog = Join-Path `
+            $env:EVIDENCE `
+            'metaeditor-compile.log'
 
-          Write-Host "EDITOR  = $env:EDITOR"
-          Write-Host "COMPILE = $env:COMPILE"
+          $CompileError = Join-Path `
+            $env:EVIDENCE `
+            'metaeditor-compile-error.log'
 
-          # Use cmd.exe so the complete quoted /compile argument,
-          # including C:\Program Files\..., reaches MetaEditor intact.
-          $Command = "`"$env:EDITOR`" `"/compile:$env:COMPILE`" /log"
+          Write-Host "MetaEditor:"
+          Write-Host $env:EDITOR
+          Write-Host ""
+          Write-Host "Compile source:"
+          Write-Host $env:COMPILE
 
-          cmd.exe /d /c "$Command 1> `"$Log`" 2> `"$Err`""
+          $Arguments = @(
+            "/compile:$env:COMPILE"
+            '/log'
+          )
 
-          $Code = $LASTEXITCODE
+          & $env:EDITOR @Arguments `
+            1> $CompileLog `
+            2> $CompileError
+
+          $CompileExitCode = $LASTEXITCODE
 
           Set-Content `
             -LiteralPath (Join-Path $env:EVIDENCE 'compile-exit-code.txt') `
-            -Value $Code `
-            -Encoding UTF8
-
-          Write-Host "MetaEditor exit code: $Code"
-
-          Start-Sleep -Seconds 5
-
-          $Ex5 = $null
-
-          $Expected = [System.IO.Path]::ChangeExtension(
-            $env:COMPILE,
-            '.ex5'
-          )
-
-          if (
+            -Value ([string]$CompileExitCode)
