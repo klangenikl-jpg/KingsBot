@@ -16,11 +16,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create evidence directory
+      - name: Initialize evidence
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Path "$env:GITHUB_WORKSPACE\phase7-evidence" -Force | Out-Null
+          $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          "Phase 7 started: $(Get-Date -Format o)" |
+            Set-Content -LiteralPath (Join-Path $evidence 'phase7-start.txt') -Encoding UTF8
 
       - name: Locate Phase 6 integration source
         shell: pwsh
@@ -28,52 +31,60 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $source = Get-ChildItem `
-            "$env:GITHUB_WORKSPACE" `
+            -Path $env:GITHUB_WORKSPACE `
             -Recurse `
             -File `
-            -Filter "KingsBot_Phase6_Integration.mq5" `
+            -Filter 'KingsBot_Phase6_Integration.mq5' `
             -ErrorAction SilentlyContinue |
             Select-Object -First 1
 
-          if (-not $source) {
-            throw "KingsBot_Phase6_Integration.mq5 was not found."
+          if ($null -eq $source) {
+            throw 'KingsBot_Phase6_Integration.mq5 was not found.'
           }
 
-          Write-Host "SOURCE: $($source.FullName)"
-          $source.FullName | Set-Content `
-            "$env:GITHUB_WORKSPACE\phase7-evidence\source-location.txt"
+          Write-Host ('SOURCE: ' + $source.FullName)
 
-          "SOURCE_DIR=$($source.Directory.FullName)" >> $env:GITHUB_ENV
+          $source.FullName |
+            Set-Content `
+              -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\source-location.txt') `
+              -Encoding UTF8
+
+          "SOURCE_DIR=$($source.Directory.FullName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Download MetaTrader 5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $installer = "$env:RUNNER_TEMP\mt5setup.exe"
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
           Invoke-WebRequest `
-            -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" `
+            -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
             -OutFile $installer `
             -UseBasicParsing
 
-          if (-not (Test-Path $installer)) {
-            throw "MT5 installer download failed."
+          if (-not (Test-Path -LiteralPath $installer)) {
+            throw 'MT5 installer download failed.'
           }
 
-          "INSTALLER=$installer" >> $env:GITHUB_ENV
+          "INSTALLER=$installer" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install MetaTrader 5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          Write-Host "Installing MT5 using unattended standard installation."
+          Write-Host 'Installing MT5 using unattended standard installation.'
 
           $p = Start-Process `
             -FilePath $env:INSTALLER `
-            -ArgumentList "/auto" `
+            -ArgumentList '/auto' `
             -Wait `
             -PassThru
 
-          Write-Host "MT5 installer exit code: $($p.Exit
+          $exitCode = $p.ExitCode
+          Write-Host ('MT5 installer exit code: ' + $exitCode)
+
+          $
