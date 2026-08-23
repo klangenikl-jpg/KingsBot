@@ -58,19 +58,20 @@ jobs:
               -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\source-location.txt') `
               -Encoding UTF8
 
-          "SOURCE_DIR=$($source.Directory.FullName)" |
-            Out-File `
-              -FilePath $env:GITHUB_ENV `
-              -Append `
-              -Encoding utf8
-
       - name: Download and install MetaTrader 5
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
-          $root = Join-Path $env:RUNNER_TEMP 'KingsBot-MT5'
+          $evidence = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'phase7-evidence'
+
+          $installer = Join-Path `
+            $env:RUNNER_TEMP `
+            'mt5setup.exe'
+
+          Write-Host 'Downloading official MetaTrader 5 installer...'
 
           Invoke-WebRequest `
             -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
@@ -81,71 +82,115 @@ jobs:
             throw 'MT5 installer download failed.'
           }
 
-          if (Test-Path -LiteralPath $root) {
-            Remove-Item `
-              -LiteralPath $root `
-              -Recurse `
-              -Force
+          $installerSize = (Get-Item -LiteralPath $installer).Length
+
+          Write-Host ('Installer size: ' + $installerSize + ' bytes')
+
+          if ($installerSize -le 0) {
+            throw 'Downloaded MT5 installer is empty.'
           }
 
-          New-Item `
-            -ItemType Directory `
-            -Path $root `
-            -Force |
-            Out-Null
+          Write-Host 'Starting MT5 unattended installation...'
 
           $p = Start-Process `
             -FilePath $installer `
-            -ArgumentList @(
-              '/auto'
-              ('/path:' + $root)
-            ) `
+            -ArgumentList @('/auto') `
             -Wait `
             -PassThru
 
-          Write-Host ('MT5 installer exit code: ' + $p.ExitCode)
+          $exitCode = $p.ExitCode
 
-          if ($p.ExitCode -ne 0) {
-            throw ('MT5 installer failed with exit code ' + $p.ExitCode)
+          Write-Host ('MT5 installer exit code: ' + $exitCode)
+
+          @(
+            'INSTALLER_EXIT_CODE=' + $exitCode
+            'INSTALLER_SIZE_BYTES=' + $installerSize
+            'INSTALLER=' + $installer
+          ) |
+            Set-Content `
+              -LiteralPath (Join-Path $evidence 'mt5-installer.txt') `
+              -Encoding UTF8
+
+          if ($exitCode -ne 0) {
+            throw ('MT5 installer failed with exit code ' + $exitCode)
           }
 
-          $terminal = Get-ChildItem `
-            -Path $root `
-            -Recurse `
-            -File `
-            -Filter 'terminal64.exe' `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+          Write-Host 'Searching standard MT5 installation locations...'
 
-          $editor = Get-ChildItem `
-            -Path $root `
-            -Recurse `
-            -File `
-            -Filter 'metaeditor64.exe' `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+          $searchRoots = @(
+            'C:\Program Files\MetaTrader 5'
+            'C:\Program Files (x86)\MetaTrader 5'
+            (Join-Path $env:LOCALAPPDATA 'Programs\MetaTrader 5')
+            (Join-Path $env:APPDATA 'MetaQuotes\Terminal')
+            $env:RUNNER_TEMP
+          )
+
+          $terminal = $null
+          $editor = $null
+
+          foreach ($root in $searchRoots) {
+
+            if (-not (Test-Path -LiteralPath $root)) {
+              continue
+            }
+
+            Write-Host ('Searching: ' + $root)
+
+            if ($null -eq $terminal) {
+              $terminal = Get-ChildItem `
+                -Path $root `
+                -Recurse `
+                -File `
+                -Filter 'terminal64.exe' `
+                -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            }
+
+            if ($null -eq $editor) {
+              $editor = Get-ChildItem `
+                -Path $root `
+                -Recurse `
+                -File `
+                -Filter 'metaeditor64.exe' `
+                -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            }
+
+            if (
+              ($null -ne $terminal) -and
+              ($null -ne $editor)
+            ) {
+              break
+            }
+          }
 
           if ($null -eq $terminal) {
-            throw 'terminal64.exe was not found after MT5 installation.'
+            throw 'MetaTrader 5 installed successfully but terminal64.exe could not be located.'
           }
 
           if ($null -eq $editor) {
-            throw 'metaeditor64.exe was not found after MT5 installation.'
+            throw 'MetaTrader 5 installed successfully but metaeditor64.exe could not be located.'
           }
 
-          "MT5_ROOT=$($terminal.Directory.FullName)" |
-            Out-File `
-              $env:GITHUB_ENV `
-              -Append `
-              -Encoding utf8
+          $root = $terminal.Directory.FullName
 
-          "METAEDITOR=$($editor.FullName)" |
+          Write-Host ('MT5_ROOT=' + $root)
+          Write-Host ('MT5_TERMINAL=' + $terminal.FullName)
+          Write-Host ('METAEDITOR=' + $editor.FullName)
+
+          "MT5_ROOT=$root" |
             Out-File `
               $env:GITHUB_ENV `
               -Append `
               -Encoding utf8
 
           "MT5_TERMINAL=$($terminal.FullName)" |
+            Out-File `
+              $env:GITHUB_ENV `
+              -Append `
+              -Encoding utf8
+
+          "METAEDITOR=$($editor.FullName)" |
             Out-File `
               $env:GITHUB_ENV `
               -Append `
@@ -224,6 +269,7 @@ jobs:
             Select-Object -First 1
 
           if ($null -ne $log) {
+
             Copy-Item `
               -LiteralPath $log.FullName `
               -Destination (Join-Path $evidence 'compiler.log') `
@@ -249,10 +295,10 @@ jobs:
             -Force
 
           @(
-            ('METAEDITOR_EXIT_CODE=' + $compile.ExitCode)
-            ('EX5_SIZE_BYTES=' + $size)
-            ('SOURCE=' + $source.FullName)
-            ('EX5=' + $ex5)
+            'METAEDITOR_EXIT_CODE=' + $compile.ExitCode
+            'EX5_SIZE_BYTES=' + $size
+            'SOURCE=' + $source.FullName
+            'EX5=' + $ex5
           ) |
             Set-Content `
               -LiteralPath (Join-Path $evidence 'build-summary.txt') `
@@ -412,17 +458,22 @@ jobs:
             $env:MT5_ROOT -and
             (Test-Path -LiteralPath $env:MT5_ROOT)
           ) {
+
             Get-ChildItem `
               -Path $env:MT5_ROOT `
               -Recurse `
               -File `
-              -Include '*.log','*.ini','*.xml' `
+              -Include '*.log','*.ini','*.htm','*.html','*.xml' `
               -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
               Select-Object -First 100 |
               ForEach-Object {
+
+                $safe = $_.Name
+
                 Copy-Item `
                   -LiteralPath $_.FullName `
-                  -Destination $evidence `
+                  -Destination (Join-Path $evidence $safe) `
                   -Force `
                   -ErrorAction SilentlyContinue
               }
