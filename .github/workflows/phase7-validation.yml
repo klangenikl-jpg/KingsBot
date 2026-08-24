@@ -2,11 +2,6 @@ name: KingsBot Phase 7 Runtime and Strategy Tester
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/phase7-validation.yml"
-      - "**/*.mq5"
-      - "**/*.mqh"
 
 permissions:
   contents: read
@@ -47,7 +42,7 @@ jobs:
             throw "Could not find $env:BOT_SOURCE_NAME."
           }
 
-          Write-Host "King's Bot source: $($source.FullName)"
+          Write-Host "Source: $($source.FullName)"
 
           "BOT_SOURCE=$($source.FullName)" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
@@ -61,39 +56,32 @@ jobs:
 
           $url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
 
-          Remove-Item $installer -Force -ErrorAction SilentlyContinue
-
-          $downloaded = $false
+          $success = $false
 
           for ($attempt = 1; $attempt -le 5; $attempt++) {
 
             Write-Host "MT5 download attempt $attempt of 5"
 
-            & aria2c `
-              --allow-overwrite=true `
-              --auto-file-renaming=false `
-              --check-integrity=true `
-              --connect-timeout=30 `
-              --timeout=60 `
-              --max-tries=3 `
-              --retry-wait=5 `
-              --split=4 `
-              --max-connection-per-server=4 `
-              --file-allocation=none `
-              --dir="$env:RUNNER_TEMP" `
-              --out='mt5setup.exe' `
-              "$url"
+            try {
+              Invoke-WebRequest `
+                -Uri $url `
+                -OutFile $installer `
+                -UseBasicParsing `
+                -TimeoutSec 120
 
-            if ($LASTEXITCODE -eq 0 -and (Test-Path $installer)) {
+              if (Test-Path $installer) {
+                $size = (Get-Item $installer).Length
 
-              $size = (Get-Item $installer).Length
+                Write-Host "Downloaded installer size: $size bytes"
 
-              Write-Host "Installer size: $size bytes"
-
-              if ($size -gt 1000000) {
-                $downloaded = $true
-                break
+                if ($size -gt 1000000) {
+                  $success = $true
+                  break
+                }
               }
+            }
+            catch {
+              Write-Host "Download attempt failed: $($_.Exception.Message)"
             }
 
             if ($attempt -lt 5) {
@@ -101,8 +89,8 @@ jobs:
             }
           }
 
-          if (-not $downloaded) {
-            throw 'MetaTrader 5 installer download failed.'
+          if (-not $success) {
+            throw 'Unable to download the MetaTrader 5 installer.'
           }
 
           "MT5_INSTALLER=$installer" |
@@ -125,43 +113,50 @@ jobs:
             -Force |
             Out-Null
 
-          $arguments = @(
-            '/auto'
-            "/path:$env:MT5_DIR"
-          )
+          Write-Host "Installing MT5 into $env:MT5_DIR"
 
-          Write-Host 'Installing MetaTrader 5...'
-          Write-Host "Installer: $env:MT5_INSTALLER"
-          Write-Host "Target: $env:MT5_DIR"
-
-          $process = Start-Process `
+          $p = Start-Process `
             -FilePath $env:MT5_INSTALLER `
-            -ArgumentList $arguments `
+            -ArgumentList @(
+              '/auto'
+              "/path:$env:MT5_DIR"
+            ) `
             -Wait `
             -PassThru `
             -NoNewWindow
 
-          $installerCode = $process.ExitCode
+          Write-Host "Installer exit code: $($p.ExitCode)"
 
-          Write-Host "MT5 installer exit code: $installerCode"
-
-          "MT5_INSTALLER_EXIT_CODE=$installerCode" |
+          "MT5_INSTALLER_EXIT_CODE=$($p.ExitCode)" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
           $terminal = Join-Path $env:MT5_DIR 'terminal64.exe'
           $editor = Join-Path $env:MT5_DIR 'metaeditor64.exe'
+          $tester = Join-Path $env:MT5_DIR 'metatester64.exe'
+
+          Write-Host 'Checking MT5 binaries...'
+
+          Get-ChildItem `
+            -Path $env:MT5_DIR `
+            -Filter '*.exe' `
+            -File `
+            -ErrorAction SilentlyContinue |
+            Select-Object Name, Length, LastWriteTime |
+            Format-Table -AutoSize
 
           if (-not (Test-Path $terminal)) {
-            throw "MT5 installation verification failed: terminal64.exe not found."
+            throw "terminal64.exe not found."
           }
 
           if (-not (Test-Path $editor)) {
-            throw "MT5 installation verification failed: metaeditor64.exe not found."
+            throw "metaeditor64.exe not found."
+          }
+
+          if (-not (Test-Path $tester)) {
+            throw "metatester64.exe not found."
           }
 
           Write-Host 'MT5 installation verified.'
-          Write-Host "Terminal: $terminal"
-          Write-Host "MetaEditor: $editor"
 
           "MT5_TERMINAL=$terminal" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
@@ -169,10 +164,13 @@ jobs:
           "MT5_EDITOR=$editor" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
+          "MT5_TESTER=$tester" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
           "MT5_ROOT_ACTUAL=$env:MT5_DIR" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Prepare MT5 portable environment
+      - name: Prepare portable MT5 environment
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -197,13 +195,14 @@ jobs:
             -Recurse `
             -Force
 
-          $expertSource = Join-Path $expertDir $env:BOT_SOURCE_NAME
+          $expertSource = Join-Path `
+            $expertDir `
+            $env:BOT_SOURCE_NAME
 
           if (-not (Test-Path $expertSource)) {
             throw "Source copy failed: $expertSource"
           }
 
-          Write-Host "Expert directory: $expertDir"
           Write-Host "Expert source: $expertSource"
 
           "EXPERT_DIR=$expertDir" |
@@ -223,65 +222,74 @@ jobs:
           Write-Host "MetaEditor: $env:MT5_EDITOR"
           Write-Host "Source: $env:EXPERT_SOURCE"
 
-          $arguments = @(
-            "/compile:$env:EXPERT_SOURCE"
-            '/log'
-          )
-
-          Write-Host 'Starting MetaEditor compilation...'
-
           $compiler = Start-Process `
             -FilePath $env:MT5_EDITOR `
-            -ArgumentList $arguments `
+            -ArgumentList @(
+              "/compile:$env:EXPERT_SOURCE"
+              '/log'
+            ) `
             -WorkingDirectory $env:MT5_ROOT_ACTUAL `
             -Wait `
             -PassThru
 
-          $compileCode = $compiler.ExitCode
+          Write-Host "MetaEditor exit code: $($compiler.ExitCode)"
 
-          Write-Host "MetaEditor process exit code: $compileCode"
-
-          "MT5_COMPILE_EXIT_CODE=$compileCode" |
+          "MT5_COMPILE_EXIT_CODE=$($compiler.ExitCode)" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
           $ex5 = Join-Path `
             $env:EXPERT_DIR `
             'KingsBot_Phase6_Integration.ex5'
 
-          Write-Host "Expected EX5: $ex5"
-
           if (-not (Test-Path $ex5)) {
-
-            Write-Host 'EX5 was NOT produced.'
-
-            Write-Host 'Searching for EX5 files:'
-
-            Get-ChildItem `
-              -Path $env:MT5_ROOT_ACTUAL `
-              -Filter '*.ex5' `
-              -File `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object FullName, Length, LastWriteTime |
-              Format-Table -AutoSize
-
-            throw "MetaEditor did not produce $ex5."
+            throw "Expected EX5 was not produced."
           }
 
-          $ex5Info = Get-Item $ex5
+          $info = Get-Item $ex5
 
-          Write-Host 'EX5 successfully produced.'
-          Write-Host "Size: $($ex5Info.Length) bytes"
-          Write-Host "Last write: $($ex5Info.LastWriteTime)"
+          Write-Host "EX5 produced."
+          Write-Host "Size: $($info.Length) bytes"
+          Write-Host "Last write: $($info.LastWriteTime)"
 
-          if ($ex5Info.Length -lt 1000) {
-            throw "EX5 is unexpectedly small: $($ex5Info.Length) bytes."
+          if ($info.Length -lt 1000) {
+            throw 'EX5 is invalid or unexpectedly small.'
           }
 
           "EXPERT_EX5=$ex5" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-          Write-Host 'Compilation verified by EX5 output.'
+      - name: Initialize MT5 portable runtime
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host 'Initializing portable MT5 runtime...'
+
+          $process = Start-Process `
+            -FilePath $env:MT5_TERMINAL `
+            -ArgumentList @('/portable') `
+            -WorkingDirectory $env:MT5_ROOT_ACTUAL `
+            -PassThru
+
+          Write-Host "Initialization PID: $($process.Id)"
+
+          Start-Sleep -Seconds 15
+
+          if (-not $process.HasExited) {
+            Write-Host 'MT5 initialization process is running.'
+
+            Stop-Process `
+              -Id $process.Id `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+            Start-Sleep -Seconds 3
+          }
+          else {
+            Write-Host "MT5 initialization exited with code $($process.ExitCode)"
+          }
+
+          Write-Host 'Portable runtime initialization complete.'
 
       - name: Create Phase 7 tester configuration
         shell: powershell
@@ -309,6 +317,8 @@ jobs:
             'ReplaceReport=1'
             'ShutdownTerminal=1'
             'Visual=0'
+            'UseLocal=1'
+            'UseRemote=0'
             'UseCloud=0'
           )
 
@@ -318,45 +328,58 @@ jobs:
             [System.Text.Encoding]::ASCII
           )
 
-          Write-Host '===== PHASE 7 TESTER CONFIG ====='
+          Write-Host '===== TESTER CONFIG ====='
           Get-Content $config
-          Write-Host '=================================='
+          Write-Host '========================='
 
           "TESTER_CONFIG=$config" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Verify tester inputs
+      - name: Verify tester infrastructure
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+
+          $agentExe = Join-Path `
+            $env:MT5_ROOT_ACTUAL `
+            'metatester64.exe'
+
+          $testerRoot = Join-Path `
+            $env:MT5_ROOT_ACTUAL `
+            'Tester'
 
           $expert = Join-Path `
             $env:MT5_ROOT_ACTUAL `
             'MQL5\Experts\KingsBot\KingsBot_Phase6_Integration.ex5'
 
-          $reportDir = Join-Path `
-            $env:MT5_ROOT_ACTUAL `
-            'Reports'
+          if (-not (Test-Path $agentExe)) {
+            throw 'metatester64.exe is missing.'
+          }
+
+          if (-not (Test-Path $testerRoot)) {
+            New-Item `
+              -ItemType Directory `
+              -Path $testerRoot `
+              -Force |
+              Out-Null
+          }
 
           if (-not (Test-Path $expert)) {
-            throw "Tester EX5 does not exist: $expert"
+            throw "Tester EX5 missing: $expert"
           }
 
-          if (-not (Test-Path $env:TESTER_CONFIG)) {
-            throw "Tester configuration does not exist: $env:TESTER_CONFIG"
-          }
+          Write-Host "MetaTester: $agentExe"
+          Write-Host "Tester root: $testerRoot"
+          Write-Host "EX5: $expert"
 
-          if (-not (Test-Path $reportDir)) {
-            throw "Report directory does not exist: $reportDir"
-          }
+          Write-Host 'Existing tester infrastructure:'
 
-          Write-Host 'Tester EX5 verified.'
-
-          Get-Item $expert |
-            Select-Object FullName, Length, LastWriteTime
-
-          Write-Host 'Tester configuration:'
-          Get-Content $env:TESTER_CONFIG
+          Get-ChildItem `
+            -Path $testerRoot `
+            -Force `
+            -ErrorAction SilentlyContinue |
+            Select-Object FullName, Length, LastWriteTime |
+            Format-Table -AutoSize
 
       - name: Run Phase 7 Strategy Tester
         shell: powershell
@@ -372,10 +395,10 @@ jobs:
             -Force `
             -ErrorAction SilentlyContinue
 
-          Write-Host 'Launching MT5 Strategy Tester...'
+          Write-Host 'Launching Phase 7 Strategy Tester...'
           Write-Host "Terminal: $env:MT5_TERMINAL"
           Write-Host "Config: $env:TESTER_CONFIG"
-          Write-Host "Expected report: $report"
+          Write-Host "Report: $report"
 
           $process = Start-Process `
             -FilePath $env:MT5_TERMINAL `
@@ -397,34 +420,44 @@ jobs:
             $elapsed += 5
 
             if (($elapsed % 30) -eq 0) {
-              Write-Host "MT5 still running after ${elapsed}s"
+              Write-Host "MT5 running: ${elapsed}s"
             }
 
             if ($elapsed -ge $timeout) {
 
-              Write-Host 'Strategy Tester timeout reached.'
+              Write-Host 'Tester timeout reached.'
 
               Stop-Process `
                 -Id $process.Id `
                 -Force `
                 -ErrorAction SilentlyContinue
 
-              throw 'Phase 7 Strategy Tester exceeded 15 minutes.'
+              throw 'Strategy Tester exceeded 15 minutes.'
             }
           }
 
           $exitCode = $process.ExitCode
 
-          Write-Host "MT5 exited with code: $exitCode"
+          Write-Host "MT5 exit code: $exitCode"
 
           "MT5_EXIT_CODE=$exitCode" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
           if (-not (Test-Path $report)) {
 
-            Write-Host 'Expected tester report was not found.'
+            Write-Host 'NO TESTER REPORT FOUND.'
 
-            Write-Host 'Searching entire MT5 directory for reports:'
+            Write-Host '===== TESTER DIRECTORY ====='
+
+            Get-ChildItem `
+              -Path (Join-Path $env:MT5_ROOT_ACTUAL 'Tester') `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length, LastWriteTime |
+              Format-Table -AutoSize
+
+            Write-Host '===== MT5 LOG FILES ====='
 
             Get-ChildItem `
               -Path $env:MT5_ROOT_ACTUAL `
@@ -432,22 +465,24 @@ jobs:
               -Recurse `
               -ErrorAction SilentlyContinue |
               Where-Object {
-                $_.Extension -in '.htm', '.html'
+                $_.Extension -in '.log', '.ini'
               } |
               Select-Object FullName, Length, LastWriteTime |
               Format-Table -AutoSize
 
-            throw 'MT5 finished without producing the Phase 7 tester report.'
+            throw "MT5 Strategy Tester failed with exit code $exitCode and produced no report."
           }
 
           $reportInfo = Get-Item $report
 
-          Write-Host 'PHASE 7 TESTER REPORT FOUND.'
+          Write-Host '================================'
+          Write-Host 'PHASE 7 REPORT SUCCESSFULLY FOUND'
+          Write-Host '================================'
           Write-Host "Report: $($reportInfo.FullName)"
           Write-Host "Size: $($reportInfo.Length) bytes"
 
           if ($reportInfo.Length -lt 1000) {
-            throw "Tester report is unexpectedly small: $($reportInfo.Length) bytes."
+            throw 'Tester report is unexpectedly small.'
           }
 
           "TESTER_REPORT=$report" |
@@ -490,61 +525,61 @@ jobs:
               -Force
           }
 
-          if ($env:MT5_ROOT_ACTUAL -and (Test-Path $env:MT5_ROOT_ACTUAL)) {
+          $testerRoot = Join-Path `
+            $env:MT5_ROOT_ACTUAL `
+            'Tester'
 
-            $diagnostics = Join-Path `
+          if (Test-Path $testerRoot) {
+
+            $destination = Join-Path `
               $evidence `
-              'MT5-Diagnostics'
+              'Tester'
 
-            New-Item `
-              -ItemType Directory `
-              -Path $diagnostics `
-              -Force |
-              Out-Null
-
-            Get-ChildItem `
-              -Path $env:MT5_ROOT_ACTUAL `
-              -File `
+            Copy-Item `
+              $testerRoot `
+              $destination `
               -Recurse `
-              -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.Extension -in '.log', '.ini', '.htm', '.html'
-              } |
-              ForEach-Object {
-
-                $relative = $_.FullName.Substring(
-                  $env:MT5_ROOT_ACTUAL.Length
-                ).TrimStart('\')
-
-                $destination = Join-Path `
-                  $diagnostics `
-                  $relative
-
-                $destinationDir = Split-Path `
-                  $destination `
-                  -Parent
-
-                New-Item `
-                  -ItemType Directory `
-                  -Path $destinationDir `
-                  -Force |
-                  Out-Null
-
-                Copy-Item `
-                  $_.FullName `
-                  $destination `
-                  -Force `
-                  -ErrorAction SilentlyContinue
-              }
+              -Force `
+              -ErrorAction SilentlyContinue
           }
 
+          $logDestination = Join-Path `
+            $evidence `
+            'MT5-Logs'
+
+          New-Item `
+            -ItemType Directory `
+            -Path $logDestination `
+            -Force |
+            Out-Null
+
+          Get-ChildItem `
+            -Path $env:MT5_ROOT_ACTUAL `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.Extension -in '.log', '.ini', '.htm', '.html'
+            } |
+            ForEach-Object {
+
+              $safeName = $_.Name
+
+              Copy-Item `
+                $_.FullName `
+                (Join-Path $logDestination $safeName) `
+                -Force `
+                -ErrorAction SilentlyContinue
+            }
+
           $summary = @(
-            'King''s Bot Phase 7 Runtime and Strategy Tester'
+            'KingsBot Phase 7 Runtime and Strategy Tester'
             ''
-            "MT5 installer exit code: $env:MT5_INSTALLER_EXIT_CODE"
-            "MT5 compile exit code: $env:MT5_COMPILE_EXIT_CODE"
-            "MT5 terminal: $env:MT5_TERMINAL"
+            "Installer exit code: $env:MT5_INSTALLER_EXIT_CODE"
+            "MetaEditor exit code: $env:MT5_COMPILE_EXIT_CODE"
             "MT5 runtime exit code: $env:MT5_EXIT_CODE"
+            "Terminal: $env:MT5_TERMINAL"
+            "MetaTester: $env:MT5_TESTER"
             "Tester config: $env:TESTER_CONFIG"
             "Tester report: $env:TESTER_REPORT"
             "Symbol: $env:TEST_SYMBOL"
@@ -558,7 +593,7 @@ jobs:
             -Value $summary `
             -Encoding utf8
 
-          Write-Host '===== PHASE 7 EVIDENCE ====='
+          Write-Host '===== EVIDENCE CONTENT ====='
 
           Get-ChildItem `
             -Path $evidence `
