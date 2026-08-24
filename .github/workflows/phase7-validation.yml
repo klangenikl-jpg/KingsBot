@@ -47,20 +47,65 @@ jobs:
           "BOT_SOURCE=$($source.FullName)" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Prepare evidence directory
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $evidence = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'phase7-evidence'
+
+          New-Item `
+            -ItemType Directory `
+            -Path $evidence `
+            -Force |
+            Out-Null
+
+          $testerEvidence = Join-Path `
+            $evidence `
+            'Tester'
+
+          $logsEvidence = Join-Path `
+            $evidence `
+            'MT5-Logs'
+
+          New-Item `
+            -ItemType Directory `
+            -Path $testerEvidence `
+            -Force |
+            Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Path $logsEvidence `
+            -Force |
+            Out-Null
+
+          "EVIDENCE_DIR=$evidence" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+          Write-Host "Evidence directory: $evidence"
+
       - name: Download MetaTrader 5
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          $installer = Join-Path `
+            $env:RUNNER_TEMP `
+            'mt5setup.exe'
+
           $url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
 
           $downloaded = $false
 
           for ($attempt = 1; $attempt -le 5; $attempt++) {
+
             Write-Host "MT5 download attempt $attempt of 5"
 
             try {
+
               Invoke-WebRequest `
                 -Uri $url `
                 -OutFile $installer `
@@ -68,7 +113,9 @@ jobs:
                 -TimeoutSec 120
 
               if (Test-Path -LiteralPath $installer) {
+
                 $size = (Get-Item -LiteralPath $installer).Length
+
                 Write-Host "Installer size: $size bytes"
 
                 if ($size -gt 1000000) {
@@ -78,7 +125,9 @@ jobs:
               }
             }
             catch {
-              Write-Host "Download attempt failed: $($_.Exception.Message)"
+
+              Write-Host "Download attempt failed:"
+              Write-Host $_.Exception.Message
             }
 
             if ($attempt -lt 5) {
@@ -127,10 +176,16 @@ jobs:
           "MT5_INSTALLER_EXIT_CODE=$($process.ExitCode)" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-          $terminal = Join-Path $env:MT5_DIR 'terminal64.exe'
-          $editor = Join-Path $env:MT5_DIR 'metaeditor64.exe'
+          $terminal = Join-Path `
+            $env:MT5_DIR `
+            'terminal64.exe'
+
+          $editor = Join-Path `
+            $env:MT5_DIR `
+            'metaeditor64.exe'
 
           if (-not (Test-Path -LiteralPath $terminal)) {
+
             $found = Get-ChildItem `
               -Path $env:MT5_DIR `
               -Filter 'terminal64.exe' `
@@ -145,376 +200,7 @@ jobs:
           }
 
           if (-not (Test-Path -LiteralPath $editor)) {
+
             $found = Get-ChildItem `
               -Path $env:MT5_DIR `
-              -Filter 'metaeditor64.exe' `
-              -File `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-
-            if ($null -ne $found) {
-              $editor = $found.FullName
-            }
-          }
-
-          if (-not (Test-Path -LiteralPath $terminal)) {
-            throw 'terminal64.exe was not found after MT5 installation.'
-          }
-
-          if (-not (Test-Path -LiteralPath $editor)) {
-            throw 'metaeditor64.exe was not found after MT5 installation.'
-          }
-
-          Write-Host "Terminal: $terminal"
-          Write-Host "MetaEditor: $editor"
-
-          "MT5_TERMINAL=$terminal" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-          "MT5_EDITOR=$editor" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Prepare King's Bot
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $expertDir = Join-Path $env:MT5_DIR 'MQL5\Experts\KingsBot'
-          $reportDir = Join-Path $env:MT5_DIR 'Reports'
-
-          New-Item -ItemType Directory -Path $expertDir -Force | Out-Null
-          New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
-
-          $sourceRoot = Split-Path $env:BOT_SOURCE -Parent
-
-          Copy-Item `
-            -Path (Join-Path $sourceRoot '*') `
-            -Destination $expertDir `
-            -Recurse `
-            -Force
-
-          $expertSource = Join-Path $expertDir $env:BOT_SOURCE_NAME
-
-          if (-not (Test-Path -LiteralPath $expertSource)) {
-            throw "Source copy failed: $expertSource"
-          }
-
-          Write-Host "Expert source: $expertSource"
-
-          "EXPERT_DIR=$expertDir" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-          "EXPERT_SOURCE=$expertSource" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-          "REPORT_DIR=$reportDir" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Compile King's Bot
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          Write-Host "MetaEditor: $env:MT5_EDITOR"
-          Write-Host "Source: $env:EXPERT_SOURCE"
-
-          $arguments = "/compile:$env:EXPERT_SOURCE /log"
-
-          $process = Start-Process `
-            -FilePath $env:MT5_EDITOR `
-            -ArgumentList $arguments `
-            -WorkingDirectory $env:MT5_DIR `
-            -Wait `
-            -PassThru `
-            -NoNewWindow
-
-          Write-Host "MetaEditor exit code: $($process.ExitCode)"
-
-          "MT5_COMPILE_EXIT_CODE=$($process.ExitCode)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-          $ex5 = Join-Path `
-            $env:EXPERT_DIR `
-            'KingsBot_Phase6_Integration.ex5'
-
-          if (-not (Test-Path -LiteralPath $ex5)) {
-            throw "EX5 was not produced: $ex5"
-          }
-
-          $info = Get-Item -LiteralPath $ex5
-
-          Write-Host "EX5 produced."
-          Write-Host "Size: $($info.Length) bytes"
-
-          if ($info.Length -lt 1000) {
-            throw 'EX5 is unexpectedly small.'
-          }
-
-          "EXPERT_EX5=$ex5" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Create authenticated tester configuration
-        shell: powershell
-        env:
-          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
-          MT5_SERVER: ${{ secrets.MT5_SERVER }}
-          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          if ([string]::IsNullOrWhiteSpace($env:MT5_LOGIN)) {
-            throw 'MT5_LOGIN secret is missing.'
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:MT5_SERVER)) {
-            throw 'MT5_SERVER secret is missing.'
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:MT5_PASSWORD)) {
-            throw 'MT5_PASSWORD secret is missing.'
-          }
-
-          $config = Join-Path `
-            $env:MT5_DIR `
-            'KingsBot_Phase7_Tester.ini'
-
-          $lines = @(
-            '[Common]'
-            "Login=$env:MT5_LOGIN"
-            "Server=$env:MT5_SERVER"
-            "Password=$env:MT5_PASSWORD"
-            'KeepPrivate=0'
-            ''
-            '[Tester]'
-            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
-            "Login=$env:MT5_LOGIN"
-            "Server=$env:MT5_SERVER"
-            "Password=$env:MT5_PASSWORD"
-            "Symbol=$env:TEST_SYMBOL"
-            "Period=$env:TEST_PERIOD"
-            'Model=0'
-            'Optimization=0'
-            "FromDate=$env:TEST_FROM"
-            "ToDate=$env:TEST_TO"
-            'ForwardMode=0'
-            'Deposit=10000'
-            'Currency=USD'
-            'Leverage=1:100'
-            'Report=Reports\KingsBot_Phase7_Tester.htm'
-            'ReplaceReport=1'
-            'ShutdownTerminal=1'
-            'Visual=0'
-            'UseLocal=1'
-            'UseRemote=0'
-            'UseCloud=0'
-          )
-
-          Set-Content `
-            -Path $config `
-            -Value $lines `
-            -Encoding ascii
-
-          Write-Host 'Tester configuration created.'
-          Write-Host "Server: $env:MT5_SERVER"
-          Write-Host "Login: $env:MT5_LOGIN"
-          Write-Host 'Password: ********'
-
-          "TESTER_CONFIG=$config" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Launch Phase 7 Strategy Tester
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $report = Join-Path `
-            $env:REPORT_DIR `
-            'KingsBot_Phase7_Tester.htm'
-
-          Remove-Item `
-            -Path $report `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-          Write-Host 'Launching Phase 7 Strategy Tester...'
-          Write-Host "Terminal: $env:MT5_TERMINAL"
-          Write-Host "Config: $env:TESTER_CONFIG"
-          Write-Host "Report: $report"
-
-          $arguments = "/portable /config:$env:TESTER_CONFIG"
-
-          $process = Start-Process `
-            -FilePath $env:MT5_TERMINAL `
-            -ArgumentList $arguments `
-            -WorkingDirectory $env:MT5_DIR `
-            -PassThru
-
-          Write-Host "MT5 PID: $($process.Id)"
-
-          $elapsed = 0
-          $timeout = 1800
-
-          while (-not $process.HasExited) {
-            Start-Sleep -Seconds 10
-            $elapsed += 10
-
-            if (($elapsed % 60) -eq 0) {
-              Write-Host "MT5 running: ${elapsed}s"
-
-              if (Test-Path -LiteralPath $report) {
-                Write-Host 'Tester report detected.'
-                break
-              }
-
-              $testerLogDir = Join-Path $env:MT5_DIR 'Tester\logs'
-
-              if (Test-Path -LiteralPath $testerLogDir) {
-                $latest = Get-ChildItem `
-                  -Path $testerLogDir `
-                  -File `
-                  -ErrorAction SilentlyContinue |
-                  Sort-Object LastWriteTime -Descending |
-                  Select-Object -First 1
-
-                if ($null -ne $latest) {
-                  Write-Host "Latest tester log: $($latest.FullName)"
-                  Get-Content `
-                    -Path $latest.FullName `
-                    -Tail 10 `
-                    -ErrorAction SilentlyContinue
-                }
-              }
-            }
-
-            if ($elapsed -ge $timeout) {
-              Stop-Process `
-                -Id $process.Id `
-                -Force `
-                -ErrorAction SilentlyContinue
-
-              throw 'Strategy Tester exceeded the 30 minute execution limit.'
-            }
-          }
-
-          if (Test-Path -LiteralPath $report) {
-            $reportInfo = Get-Item -LiteralPath $report
-
-            Write-Host 'PHASE 7 TESTER REPORT FOUND.'
-            Write-Host "Report size: $($reportInfo.Length) bytes"
-
-            if ($reportInfo.Length -lt 1000) {
-              throw 'Tester report is unexpectedly small.'
-            }
-
-            "TESTER_REPORT=$report" |
-              Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-          }
-          else {
-            $exitCode = $process.ExitCode
-
-            Write-Host "MT5 exit code: $exitCode"
-
-            "MT5_EXIT_CODE=$exitCode" |
-              Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-            throw "MT5 exited without producing the Phase 7 tester report. Exit code: $exitCode"
-          }
-
-      - name: Collect Phase 7 evidence
-        if: always()
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-
-          $evidence = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            'phase7-evidence'
-
-          New-Item `
-            -ItemType Directory `
-            -Path $evidence `
-            -Force |
-            Out-Null
-
-          if ($env:TESTER_CONFIG -and (Test-Path -LiteralPath $env:TESTER_CONFIG)) {
-            $safeConfig = Join-Path `
-              $evidence `
-              'KingsBot_Phase7_Tester.ini'
-
-            Get-Content $env:TESTER_CONFIG |
-              ForEach-Object {
-                if ($_ -match '^Password=') {
-                  'Password=REDACTED'
-                }
-                else {
-                  $_
-                }
-              } |
-              Set-Content `
-                -Path $safeConfig `
-                -Encoding utf8
-          }
-
-          if ($env:TESTER_REPORT -and (Test-Path -LiteralPath $env:TESTER_REPORT)) {
-            Copy-Item `
-              -Path $env:TESTER_REPORT `
-              -Destination (Join-Path $evidence 'KingsBot_Phase7_Tester.htm') `
-              -Force
-          }
-
-          if ($env:EXPERT_EX5 -and (Test-Path -LiteralPath $env:EXPERT_EX5)) {
-            Copy-Item `
-              -Path $env:EXPERT_EX5 `
-              -Destination (Join-Path $evidence 'KingsBot_Phase6_Integration.ex5') `
-              -Force
-          }
-
-          $testerRoot = Join-Path $env:MT5_DIR 'Tester'
-          $terminalLogs = Join-Path $env:MT5_DIR 'Logs'
-
-          if (Test-Path -LiteralPath $testerRoot) {
-            Copy-Item `
-              -Path $testerRoot `
-              -Destination (Join-Path $evidence 'Tester') `
-              -Recurse `
-              -Force `
-              -ErrorAction SilentlyContinue
-          }
-
-          if (Test-Path -LiteralPath $terminalLogs) {
-            Copy-Item `
-              -Path $terminalLogs `
-              -Destination (Join-Path $evidence 'MT5-Logs') `
-              -Recurse `
-              -Force `
-              -ErrorAction SilentlyContinue
-          }
-
-          $summary = @(
-            'KingsBot Phase 7 Runtime and Strategy Tester'
-            ''
-            "Installer exit code: $env:MT5_INSTALLER_EXIT_CODE"
-            "Compiler exit code: $env:MT5_COMPILE_EXIT_CODE"
-            "MT5 exit code: $env:MT5_EXIT_CODE"
-            "MT5 server: $env:MT5_SERVER"
-            "Tester login: $env:MT5_LOGIN"
-            "Symbol: $env:TEST_SYMBOL"
-            "Period: $env:TEST_PERIOD"
-            "From: $env:TEST_FROM"
-            "To: $env:TEST_TO"
-          )
-
-          Set-Content `
-            -Path (Join-Path $evidence 'PHASE7_SUMMARY.txt') `
-            -Value $summary `
-            -Encoding utf8
-
-      - name: Upload Phase 7 evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: KingsBot-Phase7-Evidence
-          path: phase7-evidence
-          if-no-files-found: warn
-          retention-days: 14
+              -
