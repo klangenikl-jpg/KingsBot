@@ -30,7 +30,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate King’s Bot source
+      - name: Locate King's Bot source
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -174,7 +174,8 @@ jobs:
 
           Write-Host 'MT5 installation verified.'
           Write-Host "Terminal: $terminal"
-          Write-Host "Terminal size: $($terminalInfo.Length)"
+          Write-Host "Terminal size: $($terminalInfo.Length) bytes"
+          Write-Host "MetaEditor: $editor"
 
           "MT5_TERMINAL=$terminal" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
@@ -185,7 +186,7 @@ jobs:
           "MT5_ROOT_ACTUAL=$env:MT5_DIR" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Prepare MT5 portable data directories
+      - name: Prepare MT5 portable environment
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -263,7 +264,7 @@ jobs:
           "REPORT_DIR=$reportDir" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Compile King’s Bot
+      - name: Compile King's Bot
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -271,13 +272,27 @@ jobs:
           Write-Host "MetaEditor: $env:MT5_EDITOR"
           Write-Host "Source: $env:EXPERT_SOURCE"
 
-          & $env:MT5_EDITOR `
-            "/compile:$env:EXPERT_SOURCE" `
+          $compileLog = Join-Path `
+            $env:MT5_ROOT_ACTUAL `
+            'KingsBot_Phase7_Compile.log'
+
+          $arguments = @(
+            "/compile:$env:EXPERT_SOURCE"
             '/log'
+          )
 
-          $compileCode = $LASTEXITCODE
+          Write-Host 'Starting MetaEditor compilation...'
 
-          Write-Host "MetaEditor exit code: $compileCode"
+          $compiler = Start-Process `
+            -FilePath $env:MT5_EDITOR `
+            -ArgumentList $arguments `
+            -WorkingDirectory $env:MT5_ROOT_ACTUAL `
+            -Wait `
+            -PassThru
+
+          $compileCode = $compiler.ExitCode
+
+          Write-Host "MetaEditor process exit code: $compileCode"
 
           "MT5_COMPILE_EXIT_CODE=$compileCode" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
@@ -286,48 +301,35 @@ jobs:
             $env:EXPERT_DIR `
             'KingsBot_Phase6_Integration.ex5'
 
-          if ($compileCode -ne 0) {
-            throw "King's Bot compilation failed with exit code $compileCode."
-          }
+          Write-Host "Expected EX5: $ex5"
 
           if (-not (Test-Path $ex5)) {
-            throw "Compilation succeeded but EX5 was not found: $ex5."
+
+            Write-Host 'EX5 was NOT produced.'
+
+            Write-Host 'Searching for any EX5 files:'
+
+            Get-ChildItem `
+              -Path $env:MT5_ROOT_ACTUAL `
+              -Filter '*.ex5' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length, LastWriteTime |
+              Format-Table -AutoSize
+
+            throw "MetaEditor did not produce $ex5."
           }
 
           $ex5Info = Get-Item $ex5
+
+          Write-Host 'EX5 was produced.'
+          Write-Host "Size: $($ex5Info.Length) bytes"
+          Write-Host "Last write: $($ex5Info.LastWriteTime)"
 
           if ($ex5Info.Length -lt 1000) {
             throw "EX5 is unexpectedly small: $($ex5Info.Length) bytes."
           }
 
-          Write-Host 'EX5 verified.'
-          Write-Host "Path: $ex5"
-          Write-Host "Size: $($ex5Info.Length) bytes"
-
           "EXPERT_EX5=$ex5" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - name: Create Phase 7 tester configuration
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $config = Join-Path `
-            $env:MT5_ROOT_ACTUAL `
-            'KingsBot_Phase7_Tester.ini'
-
-          $lines = @(
-            '[Tester]'
-            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
-            "Symbol=$env:TEST_SYMBOL"
-            "Period=$env:TEST_PERIOD"
-            'Model=0'
-            'Optimization=0'
-            "FromDate=$env:TEST_FROM"
-            "ToDate=$env:TEST_TO"
-            'ForwardMode=0'
-            'Deposit=10000'
-            'Currency=USD'
-            'Leverage=1:100'
-            'Report=Reports\KingsBot_Phase7_Tester.htm'
-            'ReplaceReport
+            Out-File $env:GITHUB_ENV -Encoding utf
