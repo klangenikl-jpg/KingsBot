@@ -15,6 +15,7 @@ jobs:
     env:
       MT5_DIR: C:\MT5
       BOT_SOURCE_NAME: KingsBot_Phase6_Integration.mq5
+      EX5_NAME: KingsBot_Phase6_Integration.ex5
 
     steps:
 
@@ -238,7 +239,6 @@ jobs:
 
           Write-Host "MetaEditor: $env:METAEDITOR"
           Write-Host "Expert source: $env:EXPERT_SOURCE"
-          Write-Host "Compile log: $compileLog"
 
           $process = Start-Process `
             -FilePath $env:METAEDITOR `
@@ -252,12 +252,7 @@ jobs:
             -PassThru `
             -NoNewWindow
 
-          Write-Host "MetaEditor exit code: $($process.ExitCode)"
-
-          "MetaEditor exit code: $($process.ExitCode)" |
-            Set-Content `
-              -LiteralPath (Join-Path $evidence 'compile-result.txt') `
-              -Encoding UTF8
+          Write-Host "MetaEditor process exit code: $($process.ExitCode)"
 
           if (Test-Path -LiteralPath $compileLog) {
             Copy-Item `
@@ -272,6 +267,13 @@ jobs:
                 -Encoding UTF8
           }
 
+          @(
+            "MetaEditor process exit code: $($process.ExitCode)"
+            "Compile log: $compileLog"
+          ) | Set-Content `
+            -LiteralPath (Join-Path $evidence 'compile-result.txt') `
+            -Encoding UTF8
+
           Write-Host '========== METAEDITOR OUTPUT =========='
 
           if (Test-Path -LiteralPath $compileLog) {
@@ -280,24 +282,69 @@ jobs:
 
           Write-Host '========================================'
 
+          Write-Host "Searching entire MT5 installation for $env:EX5_NAME ..."
+
+          Start-Sleep -Seconds 3
+
           $ex5 = Get-ChildItem `
-            -Path $env:EXPERT_DIR `
-            -Filter 'KingsBot_Phase6_Integration.ex5' `
+            -Path $env:MT5_DIR `
+            -Filter $env:EX5_NAME `
             -File `
             -Recurse `
             -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
 
           if ($null -eq $ex5) {
-            throw "EX5 was not produced. MetaEditor exit code: $($process.ExitCode)"
+            Write-Host 'EX5 was not found in the first search.'
+            Write-Host 'Searching again after a delay...'
+
+            Start-Sleep -Seconds 5
+
+            $ex5 = Get-ChildItem `
+              -Path $env:MT5_DIR `
+              -Filter $env:EX5_NAME `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
           }
 
-          Write-Host "EX5 found: $($ex5.FullName)"
-          Write-Host "EX5 size: $($ex5.Length) bytes"
+          if ($null -eq $ex5) {
+            Write-Host '===== ALL EX5 FILES FOUND ====='
+
+            Get-ChildItem `
+              -Path $env:MT5_DIR `
+              -Filter '*.ex5' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 100 |
+              ForEach-Object {
+                Write-Host "$($_.FullName) | $($_.Length) bytes | $($_.LastWriteTime)"
+              }
+
+            Write-Host '===== END EX5 SEARCH ====='
+
+            throw "Compilation completed but $env:EX5_NAME was not found anywhere under $env:MT5_DIR."
+          }
+
+          Write-Host "EX5 FOUND: $($ex5.FullName)"
+          Write-Host "EX5 SIZE: $($ex5.Length) bytes"
+
+          @(
+            "EX5 found: $($ex5.FullName)"
+            "Size: $($ex5.Length) bytes"
+            "LastWriteTime: $($ex5.LastWriteTime)"
+          ) | Set-Content `
+            -LiteralPath (Join-Path $evidence 'ex5-result.txt') `
+            -Encoding UTF8
 
           Copy-Item `
             -LiteralPath $ex5.FullName `
-            -Destination (Join-Path $evidence 'KingsBot_Phase6_Integration.ex5') `
+            -Destination (Join-Path $evidence $env:EX5_NAME) `
             -Force
 
       - name: Create Strategy Tester configuration
@@ -426,117 +473,4 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue'
 
-          $evidence = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            'phase7-evidence'
-
-          $mt5Logs = Join-Path `
-            $evidence `
-            'MT5-Logs'
-
-          if (Test-Path -LiteralPath $env:MT5_DIR) {
-            Get-ChildItem `
-              -Path $env:MT5_DIR `
-              -File `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Where-Object {
-                $_.Extension -in '.log','.htm','.html','.xml'
-              } |
-              Sort-Object LastWriteTime -Descending |
-              Select-Object -First 100 |
-              ForEach-Object {
-                Copy-Item `
-                  -LiteralPath $_.FullName `
-                  -Destination $mt5Logs `
-                  -Force `
-                  -ErrorAction SilentlyContinue
-              }
-          }
-
-          Get-ChildItem `
-            -Path $evidence `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            ForEach-Object {
-              "$($_.FullName) | $($_.Length) bytes"
-            } |
-            Set-Content `
-              -LiteralPath (Join-Path $evidence 'evidence-inventory.txt') `
-              -Encoding UTF8
-
-      - name: Stop MT5 processes
-        if: always()
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-
-          Get-Process terminal64 -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-
-          Get-Process metatester64 -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-
-          Get-Process metaeditor64 -ErrorAction SilentlyContinue |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-
-      - name: Create Phase 7 evidence ZIP
-        if: always()
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-
-          $evidence = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            'phase7-evidence'
-
-          $zip = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            'KingsBot-Phase7-Evidence.zip'
-
-          if (-not (Test-Path -LiteralPath $evidence)) {
-            New-Item `
-              -ItemType Directory `
-              -Path $evidence `
-              -Force |
-              Out-Null
-          }
-
-          $files = Get-ChildItem `
-            -Path $evidence `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue
-
-          if ($files.Count -eq 0) {
-            'No evidence was produced.' |
-              Set-Content `
-                -LiteralPath (Join-Path $evidence 'NO-EVIDENCE.txt') `
-                -Encoding UTF8
-          }
-
-          Remove-Item `
-            -LiteralPath $zip `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-          Compress-Archive `
-            -Path (Join-Path $evidence '*') `
-            -DestinationPath $zip `
-            -Force
-
-          Write-Host "Evidence ZIP: $zip"
-
-      - name: Upload Phase 7 evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: KingsBot-Phase7-Evidence-${{ github.run_number }}
-          path: |
-            phase7-evidence
-            KingsBot-Phase7-Evidence.zip
-          if-no-files-found: warn
-          retention-days: 14
-          compression-level: 6
-          overwrite: true
+          $e
