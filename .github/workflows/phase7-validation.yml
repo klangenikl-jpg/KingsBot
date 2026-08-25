@@ -57,6 +57,12 @@ jobs:
             $env:GITHUB_WORKSPACE `
             'phase7-evidence'
 
+          Remove-Item `
+            -LiteralPath $evidence `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
           New-Item `
             -ItemType Directory `
             -Path $evidence `
@@ -75,10 +81,28 @@ jobs:
             -Force |
             Out-Null
 
-          Set-Content `
-            -Path (Join-Path $evidence 'phase7-started.txt') `
-            -Value "Phase 7 started: $(Get-Date -Format o)" `
-            -Encoding UTF8
+          $marker = Join-Path $evidence 'PHASE7-EVIDENCE-STARTED.txt'
+
+          @(
+            "King's Bot Phase 7 Evidence"
+            "Workflow: $env:GITHUB_WORKFLOW"
+            "Run: $env:GITHUB_RUN_NUMBER"
+            "Repository: $env:GITHUB_REPOSITORY"
+            "Started: $(Get-Date -Format o)"
+          ) |
+            Set-Content `
+              -LiteralPath $marker `
+              -Encoding UTF8
+
+          Write-Host "Evidence directory:"
+          Write-Host $evidence
+
+          Write-Host "Initial evidence contents:"
+          Get-ChildItem `
+            -LiteralPath $evidence `
+            -Recurse `
+            -Force |
+            Select-Object FullName,Length
 
           "EVIDENCE_DIR=$evidence" |
             Out-File $env:GITHUB_ENV -Encoding utf8 -Append
@@ -130,66 +154,4 @@ jobs:
 
           New-Item `
             -ItemType Directory `
-            -Path $env:MT5_DIR `
-            -Force |
-            Out-Null
-
-          $process = Start-Process `
-            -FilePath $env:MT5_INSTALLER `
-            -ArgumentList @('/auto', "/path:$env:MT5_DIR") `
-            -Wait `
-            -PassThru `
-            -NoNewWindow
-
-          $installerExit = $process.ExitCode
-
-          Write-Host "MT5 installer exit code: $installerExit"
-
-          Set-Content `
-            -Path (Join-Path $env:EVIDENCE_DIR 'installer-exit-code.txt') `
-            -Value $installerExit `
-            -Encoding UTF8
-
-          Start-Sleep -Seconds 5
-
-          $terminalItem = Get-ChildItem `
-            -Path $env:MT5_DIR `
-            -Filter 'terminal64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          $editorItem = Get-ChildItem `
-            -Path $env:MT5_DIR `
-            -Filter 'metaeditor64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if ($null -eq $terminalItem -or $null -eq $editorItem) {
-
-            Set-Content `
-              -Path (Join-Path $env:EVIDENCE_DIR 'installation-result.txt') `
-              -Value @(
-                'MT5 INSTALLATION FAILED'
-                "Installer exit code: $installerExit"
-                "terminal64.exe found: $($null -ne $terminalItem)"
-                "metaeditor64.exe found: $($null -ne $editorItem)"
-              ) `
-              -Encoding UTF8
-
-            throw `
-              "MT5 installation failed. Exit code: $installerExit and required executables were not found."
-          }
-
-          Set-Content `
-            -Path (Join-Path $env:EVIDENCE_DIR 'installation-result.txt') `
-            -Value @(
-              'MT5 INSTALLATION VERIFIED'
-              "Installer exit code: $installerExit"
-              "Terminal: $($terminalItem.FullName)"
-              "MetaEditor: $($editorItem.FullName)"
-            ) `
-            -Encoding UTF
+            -Path $
