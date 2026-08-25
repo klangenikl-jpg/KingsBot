@@ -21,7 +21,6 @@ jobs:
     timeout-minutes: 35
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v5
 
@@ -46,7 +45,7 @@ jobs:
           Write-Host $source.FullName
 
           "BOT_SOURCE=$($source.FullName)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+            Out-File $env:GITHUB_ENV -Encoding utf8
 
       - name: Prepare evidence directory
         shell: powershell
@@ -96,7 +95,7 @@ jobs:
           Write-Host $evidence
 
           "EVIDENCE_DIR=$evidence" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+            Out-File $env:GITHUB_ENV -Encoding utf8
 
       - name: Download MetaTrader 5 installer
         shell: powershell
@@ -128,7 +127,7 @@ jobs:
           Write-Host "Installer size: $($item.Length) bytes"
 
           "MT5_INSTALLER=$installer" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+            Out-File $env:GITHUB_ENV -Encoding utf8
 
       - name: Install MetaTrader 5
         shell: powershell
@@ -203,10 +202,10 @@ jobs:
               -Encoding UTF8
 
           "MT5_TERMINAL=$($terminal.FullName)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+            Out-File $env:GITHUB_ENV -Encoding utf8
 
           "MT5_EDITOR=$($editor.FullName)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+            Out-File $env:GITHUB_ENV -Encoding utf8
 
       - name: Prepare King's Bot
         shell: powershell
@@ -252,13 +251,13 @@ jobs:
           }
 
           "EXPERT_DIR=$expertDir" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+            Out-File $env:GITHUB_ENV -Encoding utf8
 
           "EXPERT_SOURCE=$expertSource" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+            Out-File $env:GITHUB_ENV -Encoding utf8
 
           "REPORT_DIR=$reportDir" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+            Out-File $env:GITHUB_ENV -Encoding utf8
 
       - name: Compile King's Bot
         shell: powershell
@@ -309,9 +308,6 @@ jobs:
             -Destination (Join-Path $env:EVIDENCE_DIR 'KingsBot_Phase6_Integration.ex5') `
             -Force
 
-          "EX5_PATH=$ex5" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
       - name: Create MT5 connection configuration
         shell: powershell
         env:
@@ -360,4 +356,333 @@ jobs:
               -Encoding UTF8
 
           "CONNECTION_CONFIG=$config" |
-            Out-File $env:GITHUB_ENV -Encoding utf8 -
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+      - name: Start MT5
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $process = Start-Process `
+            -FilePath $env:MT5_TERMINAL `
+            -ArgumentList @(
+              '/portable'
+              "/config:$env:CONNECTION_CONFIG"
+            ) `
+            -WorkingDirectory $env:MT5_DIR `
+            -PassThru
+
+          Write-Host "MT5 PID: $($process.Id)"
+
+          @(
+            "PID: $($process.Id)"
+            "Started: $(Get-Date -Format o)"
+          ) |
+            Set-Content `
+              -LiteralPath (Join-Path $env:EVIDENCE_DIR 'mt5-process.txt') `
+              -Encoding UTF8
+
+          Start-Sleep -Seconds 60
+
+          if ($process.HasExited) {
+            Write-Host "MT5 exited during initialization with code $($process.ExitCode)."
+          }
+          else {
+            Write-Host 'MT5 is running.'
+          }
+
+      - name: Create Strategy Tester configuration
+        shell: powershell
+        env:
+          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
+          MT5_SERVER: ${{ secrets.MT5_SERVER }}
+          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $config = Join-Path `
+            $env:MT5_DIR `
+            'KingsBot_Phase7_Tester.ini'
+
+          @(
+            '[Common]'
+            "Login=$env:MT5_LOGIN"
+            "Password=$env:MT5_PASSWORD"
+            "Server=$env:MT5_SERVER"
+            'KeepPrivate=0'
+            ''
+            '[Tester]'
+            "Login=$env:MT5_LOGIN"
+            "Password=$env:MT5_PASSWORD"
+            "Server=$env:MT5_SERVER"
+            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
+            "Symbol=$env:TEST_SYMBOL"
+            "Period=$env:TEST_PERIOD"
+            'Model=0'
+            'Optimization=0'
+            "FromDate=$env:TEST_FROM"
+            "ToDate=$env:TEST_TO"
+            'ForwardMode=0'
+            'Deposit=10000'
+            'Currency=USD'
+            'Leverage=100'
+            'ExecutionMode=0'
+            'Visual=0'
+            'UseLocal=1'
+            'UseRemote=0'
+            'UseCloud=0'
+            'Report=Reports\KingsBot_Phase7_Tester.htm'
+            'ReplaceReport=1'
+            'ShutdownTerminal=1'
+          ) |
+            Set-Content `
+              -LiteralPath $config `
+              -Encoding ASCII
+
+          @(
+            '[Tester]'
+            "Login=$env:MT5_LOGIN"
+            'Password=***'
+            "Server=$env:MT5_SERVER"
+            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
+            "Symbol=$env:TEST_SYMBOL"
+            "Period=$env:TEST_PERIOD"
+            "FromDate=$env:TEST_FROM"
+            "ToDate=$env:TEST_TO"
+            'Report=Reports\KingsBot_Phase7_Tester.htm'
+          ) |
+            Set-Content `
+              -LiteralPath (Join-Path $env:EVIDENCE_DIR 'Tester-Config.ini') `
+              -Encoding UTF8
+
+          "TESTER_CONFIG=$config" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+      - name: Run Strategy Tester
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          $report = Join-Path `
+            $env:MT5_DIR `
+            'Reports\KingsBot_Phase7_Tester.htm'
+
+          Remove-Item `
+            -LiteralPath $report `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          $process = Start-Process `
+            -FilePath $env:MT5_TERMINAL `
+            -ArgumentList @(
+              '/portable'
+              "/config:$env:TESTER_CONFIG"
+            ) `
+            -WorkingDirectory $env:MT5_DIR `
+            -PassThru
+
+          Write-Host "Tester MT5 PID: $($process.Id)"
+
+          $elapsed = 0
+          $timeout = 1200
+          $found = $false
+
+          while ($elapsed -lt $timeout) {
+            Start-Sleep -Seconds 10
+            $elapsed += 10
+
+            $reportItem = Get-Item `
+              -LiteralPath $report `
+              -ErrorAction SilentlyContinue
+
+            if ($null -ne $reportItem -and $reportItem.Length -gt 1000) {
+              $found = $true
+              Write-Host "Strategy Tester report found after $elapsed seconds."
+              break
+            }
+
+            if ($process.HasExited) {
+              Write-Host "Tester MT5 exited with code $($process.ExitCode)."
+            }
+            else {
+              Write-Host "Tester running: $elapsed seconds"
+            }
+          }
+
+          if (-not $found) {
+            $exitCode = if ($process.HasExited) {
+              $process.ExitCode
+            }
+            else {
+              'RUNNING'
+            }
+
+            @(
+              'PHASE 7 TESTER REPORT NOT PRODUCED'
+              "Elapsed: $elapsed seconds"
+              "MT5 exited: $($process.HasExited)"
+              "MT5 exit code: $exitCode"
+              "Expected report: $report"
+            ) |
+              Set-Content `
+                -LiteralPath (Join-Path $env:EVIDENCE_DIR 'tester-result.txt') `
+                -Encoding UTF8
+
+            throw 'Strategy Tester report was not produced.'
+          }
+
+          Copy-Item `
+            -LiteralPath $report `
+            -Destination (Join-Path $env:EVIDENCE_DIR 'KingsBot_Phase7_Tester.htm') `
+            -Force
+
+          @(
+            'PHASE 7 TESTER REPORT PRODUCED'
+            "Report: $report"
+            "Size: $((Get-Item $report).Length) bytes"
+            "Elapsed: $elapsed seconds"
+          ) |
+            Set-Content `
+              -LiteralPath (Join-Path $env:EVIDENCE_DIR 'tester-result.txt') `
+              -Encoding UTF8
+
+      - name: Collect final evidence
+        if: always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          $mt5Logs = Join-Path $env:EVIDENCE_DIR 'MT5-Logs'
+
+          if (Test-Path -LiteralPath $env:MT5_DIR) {
+            Get-ChildItem `
+              -Path $env:MT5_DIR `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Extension -in '.log','.htm','.html','.ini','.xml'
+              } |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 100 |
+              ForEach-Object {
+                Copy-Item `
+                  -LiteralPath $_.FullName `
+                  -Destination $mt5Logs `
+                  -Force `
+                  -ErrorAction SilentlyContinue
+              }
+          }
+
+          Get-ChildItem `
+            -LiteralPath $env:EVIDENCE_DIR `
+            -File `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              "$($_.FullName) | $($_.Length) bytes | $($_.LastWriteTime.ToString('o'))"
+            } |
+            Set-Content `
+              -LiteralPath (Join-Path $env:EVIDENCE_DIR 'evidence-inventory.txt') `
+              -Encoding UTF8
+
+          Write-Host '========== FINAL EVIDENCE DIRECTORY =========='
+
+          Get-ChildItem `
+            -LiteralPath $env:EVIDENCE_DIR `
+            -File `
+            -Recurse `
+            -Force |
+            Select-Object FullName,Length,LastWriteTime |
+            Format-Table -AutoSize |
+            Out-String |
+            Write-Host
+
+          Write-Host '=============================================='
+
+      - name: Stop MT5 processes
+        if: always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          Get-Process -Name 'terminal64' -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+          Get-Process -Name 'metatester64' -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+          Get-Process -Name 'metaeditor64' -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+
+      - name: Create Phase 7 evidence ZIP
+        if: always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $zip = Join-Path `
+            $env:RUNNER_TEMP `
+            "KingsBot-Phase7-Evidence-$env:GITHUB_RUN_NUMBER.zip"
+
+          Remove-Item `
+            -LiteralPath $zip `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          if (-not (Test-Path -LiteralPath $env:EVIDENCE_DIR)) {
+            New-Item `
+              -ItemType Directory `
+              -Path $env:EVIDENCE_DIR `
+              -Force |
+              Out-Null
+          }
+
+          $files = Get-ChildItem `
+            -LiteralPath $env:EVIDENCE_DIR `
+            -File `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          if ($files.Count -eq 0) {
+            Set-Content `
+              -LiteralPath (Join-Path $env:EVIDENCE_DIR 'NO-EVIDENCE-GENERATED.txt') `
+              -Value "No Phase 7 evidence files were generated. Run $env:GITHUB_RUN_NUMBER." `
+              -Encoding UTF8
+          }
+
+          Compress-Archive `
+            -Path (Join-Path $env:EVIDENCE_DIR '*') `
+            -DestinationPath $zip `
+            -CompressionLevel Optimal `
+            -Force
+
+          if (-not (Test-Path -LiteralPath $zip)) {
+            throw "Evidence ZIP was not created: $zip"
+          }
+
+          $zipItem = Get-Item -LiteralPath $zip
+
+          if ($zipItem.Length -le 0) {
+            throw "Evidence ZIP is empty: $zip"
+          }
+
+          Write-Host "Evidence ZIP created:"
+          Write-Host $zip
+          Write-Host "Evidence ZIP size: $($zipItem.Length) bytes"
+
+          "EVIDENCE_ZIP=$zip" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+      - name: Upload Phase 7 evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: KingsBot-Phase7-Evidence-${{ github.run_number }}
+          path: ${{ env.EVIDENCE_ZIP }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+          overwrite: true
