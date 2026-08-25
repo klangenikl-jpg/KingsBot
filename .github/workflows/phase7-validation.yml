@@ -25,6 +25,36 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      # ------------------------------------------------------------
+      # CREATE EVIDENCE FIRST.
+      # Everything after this point can fail and the artifact
+      # upload will still have a real directory to upload.
+      # ------------------------------------------------------------
+      - name: Initialize Phase 7 evidence
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
+
+          Remove-Item $evidence -Recurse -Force -ErrorAction SilentlyContinue
+
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $evidence 'MT5-Logs') -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $evidence 'Tester-Logs') -Force | Out-Null
+
+          @(
+            "King's Bot Phase 7 Evidence"
+            "Repository: $env:GITHUB_REPOSITORY"
+            "Workflow: $env:GITHUB_WORKFLOW"
+            "Run: $env:GITHUB_RUN_NUMBER"
+            "Started: $(Get-Date -Format o)"
+          ) | Set-Content `
+            -LiteralPath (Join-Path $evidence 'PHASE7-EVIDENCE-STARTED.txt') `
+            -Encoding UTF8
+
+          Write-Host "Evidence directory: $evidence"
+
       - name: Locate King's Bot source
         shell: powershell
         run: |
@@ -42,58 +72,21 @@ jobs:
             throw "Could not find $env:BOT_SOURCE_NAME"
           }
 
-          Write-Host "Source found:"
-          Write-Host $source.FullName
+          Write-Host "Source found: $($source.FullName)"
 
-          "BOT_SOURCE=$($source.FullName)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
-
-      - name: Prepare evidence directory
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
-
-          Remove-Item `
-            -LiteralPath $evidence `
-            -Recurse `
-            -Force `
-            -ErrorAction SilentlyContinue
-
-          New-Item `
-            -ItemType Directory `
-            -Path $evidence `
-            -Force |
-            Out-Null
-
-          New-Item `
-            -ItemType Directory `
-            -Path (Join-Path $evidence 'MT5-Logs') `
-            -Force |
-            Out-Null
-
-          New-Item `
-            -ItemType Directory `
-            -Path (Join-Path $evidence 'Tester-Logs') `
-            -Force |
-            Out-Null
+          Copy-Item `
+            -LiteralPath $source.FullName `
+            -Destination (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\source-located.txt') `
+            -Force
 
           @(
-            "King's Bot Phase 7 Evidence"
-            "Workflow: $env:GITHUB_WORKFLOW"
-            "Run: $env:GITHUB_RUN_NUMBER"
-            "Repository: $env:GITHUB_REPOSITORY"
-            "Started: $(Get-Date -Format o)"
-          ) |
-            Set-Content `
-              -LiteralPath (Join-Path $evidence 'PHASE7-EVIDENCE-STARTED.txt') `
-              -Encoding UTF8
+            "Source: $($source.FullName)"
+            "Size: $($source.Length) bytes"
+          ) | Set-Content `
+            -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\source-info.txt') `
+            -Encoding UTF8
 
-          Write-Host "Evidence directory:"
-          Write-Host $evidence
-
-          "EVIDENCE_DIR=$evidence" |
+          "BOT_SOURCE=$($source.FullName)" |
             Out-File $env:GITHUB_ENV -Encoding utf8
 
       - name: Download MetaTrader 5 installer
@@ -103,25 +96,24 @@ jobs:
 
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
-          $url = 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe'
-
           Invoke-WebRequest `
-            -Uri $url `
+            -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
             -OutFile $installer `
             -UseBasicParsing `
             -TimeoutSec 180
 
-          if (-not (Test-Path -LiteralPath $installer)) {
+          if (-not (Test-Path $installer)) {
             throw 'MT5 installer was not downloaded.'
           }
 
-          $item = Get-Item -LiteralPath $installer
+          $size = (Get-Item $installer).Length
 
-          if ($item.Length -lt 1000000) {
-            throw "MT5 installer is unexpectedly small: $($item.Length) bytes"
-          }
+          Write-Host "Installer size: $size bytes"
 
-          Write-Host "Installer size: $($item.Length) bytes"
+          "Installer size: $size bytes" |
+            Set-Content `
+              -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\installer-info.txt') `
+              -Encoding UTF8
 
           "MT5_INSTALLER=$installer" |
             Out-File $env:GITHUB_ENV -Encoding utf8
@@ -143,66 +135,60 @@ jobs:
             -Force |
             Out-Null
 
-          $process = Start-Process `
+          $p = Start-Process `
             -FilePath $env:MT5_INSTALLER `
             -ArgumentList @(
               '/auto'
               "/path:$env:MT5_DIR"
             ) `
             -Wait `
-            -PassThru `
-            -NoNewWindow
+            -PassThru
 
-          $installerExit = $process.ExitCode
+          Write-Host "MT5 installer exit code: $($p.ExitCode)"
 
-          Write-Host "MT5 installer exit code: $installerExit"
-
-          Set-Content `
-            -LiteralPath (Join-Path $env:EVIDENCE_DIR 'installer-exit-code.txt') `
-            -Value $installerExit `
+          @(
+            "Installer exit code: $($p.ExitCode)"
+            "Completed: $(Get-Date -Format o)"
+          ) | Set-Content `
+            -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\installer-result.txt') `
             -Encoding UTF8
 
           Start-Sleep -Seconds 5
 
-          $terminal = Get-ChildItem `
+          $terminals = Get-ChildItem `
             -Path $env:MT5_DIR `
             -Filter 'terminal64.exe' `
             -File `
             -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+            -ErrorAction SilentlyContinue
 
-          $editor = Get-ChildItem `
+          $editors = Get-ChildItem `
             -Path $env:MT5_DIR `
             -Filter 'metaeditor64.exe' `
             -File `
             -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
+            -ErrorAction SilentlyContinue
 
-          if ($null -eq $terminal) {
+          if ($terminals.Count -eq 0) {
             throw 'terminal64.exe was not found after MT5 installation.'
           }
 
-          if ($null -eq $editor) {
+          if ($editors.Count -eq 0) {
             throw 'metaeditor64.exe was not found after MT5 installation.'
           }
 
+          $terminal = $terminals | Select-Object -First 1
+          $editor = $editors | Select-Object -First 1
+
+          Write-Host "MT5 terminal: $($terminal.FullName)"
+          Write-Host "MetaEditor: $($editor.FullName)"
+
           @(
-            'MT5 INSTALLATION VERIFIED'
-            "Installer exit code: $installerExit"
             "Terminal: $($terminal.FullName)"
             "MetaEditor: $($editor.FullName)"
-          ) |
-            Set-Content `
-              -LiteralPath (Join-Path $env:EVIDENCE_DIR 'installation-result.txt') `
-              -Encoding UTF8
-
-          "MT5_TERMINAL=$($terminal.FullName)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
-
-          "MT5_EDITOR=$($editor.FullName)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
+          ) | Set-Content `
+            -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\mt5-paths.txt') `
+            -Encoding UTF8
 
       - name: Prepare King's Bot
         shell: powershell
@@ -217,10 +203,6 @@ jobs:
             $env:MT5_DIR `
             'Reports'
 
-          $sourceRoot = Split-Path `
-            $env:BOT_SOURCE `
-            -Parent
-
           New-Item `
             -ItemType Directory `
             -Path $expertDir `
@@ -233,6 +215,10 @@ jobs:
             -Force |
             Out-Null
 
+          $sourceRoot = Split-Path `
+            $env:BOT_SOURCE `
+            -Parent
+
           Copy-Item `
             -Path (Join-Path $sourceRoot '*') `
             -Destination $expertDir `
@@ -243,30 +229,32 @@ jobs:
             $expertDir `
             $env:BOT_SOURCE_NAME
 
-          if (-not (Test-Path -LiteralPath $expertSource)) {
-            throw "Source copy failed: $expertSource"
+          if (-not (Test-Path $expertSource)) {
+            throw "EA source was not copied correctly: $expertSource"
           }
 
-          Write-Host "Expert directory: $expertDir"
           Write-Host "Expert source: $expertSource"
 
-          "EXPERT_DIR=$expertDir" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
+          @(
+            "Expert directory: $expertDir"
+            "Expert source: $expertSource"
+          ) | Set-Content `
+            -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\expert-paths.txt') `
+            -Encoding UTF8
 
-          "EXPERT_SOURCE=$expertSource" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
-
-          "REPORT_DIR=$reportDir" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
-
+      # ------------------------------------------------------------
+      # IMPORTANT:
+      # MetaEditor is rediscovered here.
+      # No dependency on MT5_TERMINAL or EXPERT_DIR from another step.
+      # ------------------------------------------------------------
       - name: Compile King's Bot
         shell: powershell
         run: |
           $ErrorActionPreference = 'Continue'
 
-          # Reconstruct these paths locally.
-          # Do not depend on EXpert_DIR / EXPERT_SOURCE being
-          # inherited from an earlier workflow step.
+          $evidence = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'phase7-evidence'
 
           $expertDir = Join-Path `
             $env:MT5_DIR `
@@ -276,210 +264,16 @@ jobs:
             $expertDir `
             $env:BOT_SOURCE_NAME
 
-          $compileLog = Join-Path `
-            $env:EVIDENCE_DIR `
-            'metaeditor.log'
-
-          Write-Host "MetaEditor: $env:MT5_EDITOR"
-          Write-Host "Expert directory: $expertDir"
-          Write-Host "Expert source: $expertSource"
-          Write-Host "Compile log: $compileLog"
-
-          if (-not (Test-Path -LiteralPath $env:MT5_EDITOR)) {
-            throw "MetaEditor was not found: $env:MT5_EDITOR"
-          }
-
-          if (-not (Test-Path -LiteralPath $expertSource)) {
-            throw "EA source was not found: $expertSource"
-          }
-
-          $process = Start-Process `
-            -FilePath $env:MT5_EDITOR `
-            -ArgumentList @(
-              '/portable'
-              "/compile:$expertSource"
-              "/log:$compileLog"
-            ) `
-            -WorkingDirectory $env:MT5_DIR `
-            -Wait `
-            -PassThru `
-            -NoNewWindow
-
-          Write-Host "MetaEditor exit code: $($process.ExitCode)"
-
-          Set-Content `
-            -LiteralPath (Join-Path $env:EVIDENCE_DIR 'metaeditor-exit-code.txt') `
-            -Value $process.ExitCode `
-            -Encoding UTF8
-
-          if (Test-Path -LiteralPath $compileLog) {
-            Write-Host '========== METAEDITOR LOG =========='
-            Get-Content -LiteralPath $compileLog -ErrorAction SilentlyContinue |
-              ForEach-Object { Write-Host $_ }
-            Write-Host '===================================='
-          }
-          else {
-            Write-Host 'MetaEditor log was not created.'
-          }
-
-          $ex5Candidates = Get-ChildItem `
-            -Path $expertDir `
-            -Filter '*.ex5' `
+          $editor = Get-ChildItem `
+            -Path $env:MT5_DIR `
+            -Filter 'metaeditor64.exe' `
             -File `
             -Recurse `
-            -ErrorAction SilentlyContinue
-
-          Write-Host '========== EX5 DISCOVERY =========='
-
-          if ($null -ne $ex5Candidates) {
-            $ex5Candidates |
-              Select-Object FullName,Length,LastWriteTime |
-              Format-Table -AutoSize |
-              Out-String |
-              Write-Host
-          }
-
-          Write-Host '==================================='
-
-          $ex5 = $ex5Candidates |
-            Where-Object {
-              $_.BaseName -eq 'KingsBot_Phase6_Integration'
-            } |
+            -ErrorAction SilentlyContinue |
             Select-Object -First 1
 
-          if ($null -eq $ex5) {
-            throw "EX5 was not produced. MetaEditor exit code: $($process.ExitCode)"
+          if ($null -eq $editor) {
+            throw 'MetaEditor could not be rediscovered.'
           }
 
-          if ($ex5.Length -lt 1000) {
-            throw "EX5 is unexpectedly small: $($ex5.Length) bytes"
-          }
-
-          Write-Host "EX5 produced: $($ex5.FullName)"
-          Write-Host "EX5 size: $($ex5.Length) bytes"
-
-          Copy-Item `
-            -LiteralPath $ex5.FullName `
-            -Destination (Join-Path $env:EVIDENCE_DIR 'KingsBot_Phase6_Integration.ex5') `
-            -Force
-
-      - name: Create MT5 connection configuration
-        shell: powershell
-        env:
-          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
-          MT5_SERVER: ${{ secrets.MT5_SERVER }}
-          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          if ([string]::IsNullOrWhiteSpace($env:MT5_LOGIN)) {
-            throw 'MT5_LOGIN secret is missing.'
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:MT5_SERVER)) {
-            throw 'MT5_SERVER secret is missing.'
-          }
-
-          if ([string]::IsNullOrWhiteSpace($env:MT5_PASSWORD)) {
-            throw 'MT5_PASSWORD secret is missing.'
-          }
-
-          $config = Join-Path `
-            $env:MT5_DIR `
-            'KingsBot_Phase7_Connection.ini'
-
-          @(
-            '[Common]'
-            "Login=$env:MT5_LOGIN"
-            "Password=$env:MT5_PASSWORD"
-            "Server=$env:MT5_SERVER"
-            'KeepPrivate=0'
-          ) |
-            Set-Content `
-              -LiteralPath $config `
-              -Encoding ASCII
-
-          @(
-            '[Common]'
-            "Login=$env:MT5_LOGIN"
-            'Password=***'
-            "Server=$env:MT5_SERVER"
-            'KeepPrivate=0'
-          ) |
-            Set-Content `
-              -LiteralPath (Join-Path $env:EVIDENCE_DIR 'Connection-Config.ini') `
-              -Encoding UTF8
-
-          "CONNECTION_CONFIG=$config" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
-
-      - name: Start MT5
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $process = Start-Process `
-            -FilePath $env:MT5_TERMINAL `
-            -ArgumentList @(
-              '/portable'
-              "/config:$env:CONNECTION_CONFIG"
-            ) `
-            -WorkingDirectory $env:MT5_DIR `
-            -PassThru
-
-          Write-Host "MT5 PID: $($process.Id)"
-
-          @(
-            "PID: $($process.Id)"
-            "Started: $(Get-Date -Format o)"
-          ) |
-            Set-Content `
-              -LiteralPath (Join-Path $env:EVIDENCE_DIR 'mt5-process.txt') `
-              -Encoding UTF8
-
-          Start-Sleep -Seconds 60
-
-          if ($process.HasExited) {
-            Write-Host "MT5 exited during initialization with code $($process.ExitCode)."
-          }
-          else {
-            Write-Host 'MT5 is running.'
-          }
-
-      - name: Create Strategy Tester configuration
-        shell: powershell
-        env:
-          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
-          MT5_SERVER: ${{ secrets.MT5_SERVER }}
-          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $config = Join-Path `
-            $env:MT5_DIR `
-            'KingsBot_Phase7_Tester.ini'
-
-          @(
-            '[Common]'
-            "Login=$env:MT5_LOGIN"
-            "Password=$env:MT5_PASSWORD"
-            "Server=$env:MT5_SERVER"
-            'KeepPrivate=0'
-            ''
-            '[Tester]'
-            "Login=$env:MT5_LOGIN"
-            "Password=$env:MT5_PASSWORD"
-            "Server=$env:MT5_SERVER"
-            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
-            "Symbol=$env:TEST_SYMBOL"
-            "Period=$env:TEST_PERIOD"
-            'Model=0'
-            'Optimization=0'
-            "FromDate=$env:TEST_FROM"
-            "ToDate=$env:TEST_TO"
-            'ForwardMode=0'
-            'Deposit=10000'
-            'Currency=USD'
-            'Leverage=100'
-            'ExecutionMode=0'
-            'Visual
+          if (-
