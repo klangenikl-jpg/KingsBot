@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -25,7 +26,9 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+
           $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
+
           New-Item -ItemType Directory -Path $evidence -Force | Out-Null
           New-Item -ItemType Directory -Path "$evidence\MT5-Logs" -Force | Out-Null
           New-Item -ItemType Directory -Path "$evidence\Tester-Logs" -Force | Out-Null
@@ -34,6 +37,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+
           $source = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter $env:BOT_SOURCE_NAME -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 
           if ($null -eq $source) {
@@ -47,6 +51,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
           Invoke-WebRequest -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' -OutFile $installer -UseBasicParsing -TimeoutSec 180
@@ -63,11 +68,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           Remove-Item -LiteralPath $env:MT5_DIR -Recurse -Force -ErrorAction SilentlyContinue
+
           New-Item -ItemType Directory -Path $env:MT5_DIR -Force | Out-Null
 
           $p = Start-Process -FilePath $env:MT5_INSTALLER -ArgumentList "/auto","/path:$env:MT5_DIR" -Wait -PassThru
 
           Write-Host "Installer exit code: $($p.ExitCode)"
+
           Start-Sleep -Seconds 10
 
           $terminal = Get-ChildItem -Path $env:MT5_DIR -Filter 'terminal64.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -93,9 +100,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
 
           $expertDir = Join-Path $env:MT5_DIR 'MQL5\Experts\KingsBot'
+
           New-Item -ItemType Directory -Path $expertDir -Force | Out-Null
 
           $sourceRoot = Split-Path $env:BOT_SOURCE -Parent
+
           Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $expertDir -Recurse -Force
 
           $expertSource = Join-Path $expertDir $env:BOT_SOURCE_NAME
@@ -134,30 +143,28 @@ jobs:
             Get-Content -LiteralPath $compileLog
           }
 
-      - name: Find compiled EX5
+      - name: Verify compiled EX5
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
 
-          Write-Host '========== SEARCHING FOR COMPILED EX5 =========='
+          Write-Host '========== VERIFYING COMPILED EX5 =========='
 
-          $destination = Join-Path $env:MT5_DIR 'MQL5\Experts\KingsBot\KingsBot_Phase6_Integration.ex5'
+          $ex5 = Join-Path $env:MT5_DIR 'MQL5\Experts\KingsBot\KingsBot_Phase6_Integration.ex5'
 
-          if (Test-Path -LiteralPath $destination) {
-            Write-Host "EX5 FOUND: $destination"
-          }
-          else {
+          if (-not (Test-Path -LiteralPath $ex5)) {
             Write-Host 'Expected EX5 was not found.'
-            Write-Host 'Searching C:\MT5 for all EX5 files.'
 
             Get-ChildItem -Path $env:MT5_DIR -Filter '*.ex5' -File -Recurse -ErrorAction SilentlyContinue |
               Select-Object FullName,Length,LastWriteTime |
               Format-Table -AutoSize
 
-            throw "Compilation completed but $env:EX5_NAME could not be located."
+            throw "Compiled EX5 not found: $ex5"
           }
 
-          $size = (Get-Item -LiteralPath $destination).Length
+          $size = (Get-Item -LiteralPath $ex5).Length
+
+          Write-Host "EX5 FOUND: $ex5"
           Write-Host "EX5 SIZE: $size bytes"
 
           if ($size -lt 1000) {
@@ -166,9 +173,9 @@ jobs:
 
           $evidenceEx5 = Join-Path $env:GITHUB_WORKSPACE "phase7-evidence\$env:EX5_NAME"
 
-          Copy-Item -LiteralPath $destination -Destination $evidenceEx5 -Force
+          Copy-Item -LiteralPath $ex5 -Destination $evidenceEx5 -Force
 
-          Write-Host "EX5 READY: $destination"
+          Write-Host 'EX5 verification successful.'
 
       - name: Create tester configuration
         shell: powershell
@@ -221,6 +228,8 @@ jobs:
           $lines | Set-Content -LiteralPath $config -Encoding ASCII
 
           Copy-Item -LiteralPath $config -Destination (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\KingsBot_Phase7_Tester.ini') -Force
+
+          Write-Host 'Tester configuration created.'
 
       - name: Run Phase 7 Tester
         shell: powershell
