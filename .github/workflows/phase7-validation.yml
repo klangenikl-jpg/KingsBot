@@ -69,9 +69,11 @@ jobs:
             -OutFile $installer `
             -UseBasicParsing
 
-          if (-not (Test-Path $installer)) {
+          if (-not (Test-Path -LiteralPath $installer)) {
             throw 'MT5 installer download failed.'
           }
+
+          Write-Host "MT5 installer: $installer"
 
           "MT5_INSTALLER=$installer" |
             Out-File $env:GITHUB_ENV -Encoding utf8
@@ -111,147 +113,8 @@ jobs:
             Select-Object -First 1
 
           if ($null -eq $terminal) {
-            throw 'terminal64.exe was not found.'
+            throw "terminal64.exe was not found under $env:MT5_DIR"
           }
 
           $editor = Get-ChildItem `
-            -Path $env:MT5_DIR `
-            -Filter 'metaeditor64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if ($null -eq $editor) {
-            throw 'metaeditor64.exe was not found.'
-          }
-
-          Write-Host "TERMINAL: $($terminal.FullName)"
-          Write-Host "METAEDITOR: $($editor.FullName)"
-
-          "MT5_TERMINAL=$($terminal.FullName)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
-
-          "METAEDITOR=$($editor.FullName)" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
-
-      - name: Prepare EA
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $expertDir = "$env:MT5_DIR\MQL5\Experts\KingsBot"
-
-          New-Item `
-            -ItemType Directory `
-            -Path $expertDir `
-            -Force |
-            Out-Null
-
-          $sourceRoot = Split-Path $env:BOT_SOURCE -Parent
-
-          Copy-Item `
-            -Path "$sourceRoot\*" `
-            -Destination $expertDir `
-            -Recurse `
-            -Force
-
-          $expertSource = "$expertDir\$env:BOT_SOURCE_NAME"
-
-          if (-not (Test-Path $expertSource)) {
-            throw "EA source missing: $expertSource"
-          }
-
-          "EXPERT_SOURCE=$expertSource" |
-            Out-File $env:GITHUB_ENV -Encoding utf8
-
-          Write-Host "EXPERT: $expertSource"
-
-      - name: Compile EA
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Continue'
-
-          $log = "$env:RUNNER_TEMP\KingsBot-compile.log"
-
-          $p = Start-Process `
-            -FilePath $env:METAEDITOR `
-            -ArgumentList @(
-              '/portable'
-              "/compile:$env:EXPERT_SOURCE"
-              "/log:$log"
-            ) `
-            -WorkingDirectory $env:MT5_DIR `
-            -Wait `
-            -PassThru `
-            -NoNewWindow
-
-          Write-Host "MetaEditor exit code: $($p.ExitCode)"
-
-          if (Test-Path $log) {
-            Copy-Item `
-              $log `
-              "$env:GITHUB_WORKSPACE\phase7-evidence\compile.log" `
-              -Force
-
-            Get-Content $log
-          }
-
-          Start-Sleep -Seconds 5
-
-          $ex5 = Get-ChildItem `
-            -Path $env:MT5_DIR `
-            -Filter $env:EX5_NAME `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending |
-            Select-Object -First 1
-
-          if ($null -eq $ex5) {
-            throw "EX5 was not produced: $env:EX5_NAME"
-          }
-
-          Write-Host "EX5: $($ex5.FullName)"
-          Write-Host "EX5 SIZE: $($ex5.Length)"
-
-      - name: Create tester configuration
-        shell: powershell
-        env:
-          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          if ([string]::IsNullOrWhiteSpace($env:MT5_LOGIN)) {
-            throw 'MT5_LOGIN secret is empty.'
-          }
-
-          $config = "$env:MT5_DIR\KingsBot_Phase7_Tester.ini"
-
-          $lines = @(
-            '[Tester]'
-            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
-            'Symbol=EURUSD'
-            'Period=M15'
-            'Model=0'
-            'Optimization=0'
-            'FromDate=2025.01.01'
-            'ToDate=2026.08.01'
-            'ForwardMode=0'
-            "Login=$env:MT5_LOGIN"
-            'Deposit=10000'
-            'Currency=USD'
-            'Leverage=1:100'
-            'UseLocal=1'
-            'UseRemote=0'
-            'UseCloud=0'
-            'Visual=0'
-            'ReplaceReport=1'
-            'Report=KingsBot_Phase7_Tester'
-            'ShutdownTerminal=1'
-          )
-
-          [System.IO.File]::WriteAllLines(
-            $config,
-            $lines,
-            [System
+            -Path $
