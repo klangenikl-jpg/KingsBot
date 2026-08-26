@@ -29,23 +29,29 @@ jobs:
 
           $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
 
-          Remove-Item -LiteralPath $evidence -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $evidence) {
+            Remove-Item -LiteralPath $evidence -Recurse -Force
+          }
 
           New-Item -ItemType Directory -Path $evidence -Force | Out-Null
-          New-Item -ItemType Directory -Path (Join-Path $evidence 'Tester-Logs') -Force | Out-Null
-          New-Item -ItemType Directory -Path (Join-Path $evidence 'MT5-Logs') -Force | Out-Null
-
-          Write-Host "Evidence directory: $evidence"
+          New-Item -ItemType Directory -Path "$evidence\MT5-Logs" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$evidence\Tester-Logs" -Force | Out-Null
 
       - name: Locate King Bot source
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $source = Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter $env:BOT_SOURCE_NAME -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          $source = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter $env:BOT_SOURCE_NAME `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
           if ($null -eq $source) {
-            throw "Source file not found: $env:BOT_SOURCE_NAME"
+            throw 'KingsBot source file was not found.'
           }
 
           Write-Host "SOURCE: $($source.FullName)"
@@ -59,26 +65,26 @@ jobs:
 
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
-          Write-Host "Downloading MT5 installer..."
-          Write-Host "URL: https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
-
-          Invoke-WebRequest -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' -OutFile $installer -UseBasicParsing
+          Invoke-WebRequest `
+            -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
+            -OutFile $installer `
+            -UseBasicParsing
 
           if (-not (Test-Path -LiteralPath $installer)) {
-            throw "MT5 installer was not downloaded."
+            throw 'MT5 installer download failed.'
           }
 
-          $installerSize = (Get-Item -LiteralPath $installer).Length
+          $size = (Get-Item -LiteralPath $installer).Length
 
-          Write-Host "Installer size: $installerSize bytes"
+          Write-Host "MT5 installer size: $size bytes"
 
-          if ($installerSize -lt 100000) {
-            throw "Downloaded MT5 installer is unexpectedly small."
+          if ($size -lt 100000) {
+            throw 'MT5 installer is unexpectedly small.'
           }
 
           "MT5_INSTALLER=$installer" | Out-File $env:GITHUB_ENV -Encoding utf8
 
-      - name: Install and verify MT5
+      - name: Install MT5
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -86,126 +92,10 @@ jobs:
           $mt5Dir = 'C:\MT5'
           $installer = $env:MT5_INSTALLER
 
-          Write-Host '========== INSTALLING MT5 =========='
+          if (Test-Path -LiteralPath $mt5Dir) {
+            Remove-Item -LiteralPath $mt5Dir -Recurse -Force
+          }
 
-          Remove-Item -LiteralPath $mt5Dir -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $mt5Dir -Force | Out-Null
 
-          if (-not (Test-Path -LiteralPath $installer)) {
-            throw "Installer does not exist: $installer"
-          }
-
-          $arguments = @('/auto', "/path:$mt5Dir")
-
-          $installerProcess = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
-
-          Write-Host "MT5 installer exit code: $($installerProcess.ExitCode)"
-
-          Start-Sleep -Seconds 10
-
-          Write-Host '========== SEARCHING FOR MT5 EXECUTABLES =========='
-
-          $terminal = Get-ChildItem -Path $mt5Dir -Filter 'terminal64.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          $editor = Get-ChildItem -Path $mt5Dir -Filter 'metaeditor64.exe' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-
-          if ($null -eq $terminal) {
-            Write-Host 'terminal64.exe was not found.'
-
-            Get-ChildItem -Path $mt5Dir -Recurse -Force -ErrorAction SilentlyContinue |
-              Select-Object FullName, Length, LastWriteTime |
-              Select-Object -First 200 |
-              Format-Table -AutoSize
-
-            throw "MT5 installation did not produce terminal64.exe. Installer exit code: $($installerProcess.ExitCode)"
-          }
-
-          if ($null -eq $editor) {
-            throw "MT5 installation did not produce metaeditor64.exe. Installer exit code: $($installerProcess.ExitCode)"
-          }
-
-          Write-Host "TERMINAL: $($terminal.FullName)"
-          Write-Host "METAEDITOR: $($editor.FullName)"
-
-          "MT5_TERMINAL=$($terminal.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8
-          "METAEDITOR=$($editor.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8
-
-          Write-Host '========== MT5 VERIFIED =========='
-
-      - name: Prepare King Bot
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $expertDir = 'C:\MT5\MQL5\Experts\KingsBot'
-
-          New-Item -ItemType Directory -Path $expertDir -Force | Out-Null
-
-          $sourceRoot = Split-Path -Path $env:BOT_SOURCE -Parent
-
-          Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $expertDir -Recurse -Force
-
-          $expertSource = Join-Path $expertDir $env:BOT_SOURCE_NAME
-
-          if (-not (Test-Path -LiteralPath $expertSource)) {
-            throw "Prepared EA source was not found: $expertSource"
-          }
-
-          Write-Host "EXPERT SOURCE: $expertSource"
-
-          "EXPERT_SOURCE=$expertSource" | Out-File $env:GITHUB_ENV -Encoding utf8
-
-      - name: Compile King Bot
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $compileLog = Join-Path $env:RUNNER_TEMP 'KingsBot-compile.log'
-
-          Write-Host '========== COMPILING KING BOT =========='
-
-          $compileProcess = Start-Process -FilePath $env:METAEDITOR -ArgumentList @('/portable', "/compile:$env:EXPERT_SOURCE", "/log:$compileLog") -WorkingDirectory $env:MT5_DIR -Wait -PassThru
-
-          Write-Host "MetaEditor exit code: $($compileProcess.ExitCode)"
-
-          if (Test-Path -LiteralPath $compileLog) {
-            Copy-Item -LiteralPath $compileLog -Destination (Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence\compile.log') -Force
-            Get-Content -LiteralPath $compileLog
-          }
-
-          Start-Sleep -Seconds 5
-
-          Write-Host '========== SEARCHING FOR GENERATED EX5 =========='
-
-          $ex5Files = Get-ChildItem -Path $env:MT5_DIR -Filter $env:EX5_NAME -File -Recurse -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending
-
-          if ($null -eq $ex5Files -or $ex5Files.Count -eq 0) {
-            Write-Host 'Expected EX5 was not found.'
-
-            Write-Host '========== ALL EX5 FILES =========='
-
-            Get-ChildItem -Path $env:MT5_DIR -Filter '*.ex5' -File -Recurse -ErrorAction SilentlyContinue |
-              Select-Object FullName, Length, LastWriteTime |
-              Sort-Object LastWriteTime -Descending |
-              Format-Table -AutoSize
-
-            throw "EX5 was not produced or could not be located: $env:EX5_NAME"
-          }
-
-          $ex5 = $ex5Files | Select-Object -First 1
-
-          Write-Host "GENERATED EX5: $($ex5.FullName)"
-          Write-Host "EX5 SIZE: $($ex5.Length) bytes"
-
-          if ($ex5.Length -lt 1000) {
-            throw "Generated EX5 is unexpectedly small."
-          }
-
-          $finalEx5 = 'C:\MT5\MQL5\Experts\KingsBot\KingsBot_Phase6_Integration.ex5'
-
-          if ($ex5.FullName -ne $finalEx5) {
-            Copy-Item -LiteralPath $ex5.FullName -Destination $finalEx5 -Force
-          }
-
-          if (-not (Test-Path -LiteralPath $finalEx5)) {
-            throw "Final
+         
