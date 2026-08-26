@@ -29,11 +29,29 @@ jobs:
 
           $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
 
-          Remove-Item $evidence -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item `
+            -Path $evidence `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
 
-          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
-          New-Item -ItemType Directory -Path "$evidence\Tester-Logs" -Force | Out-Null
-          New-Item -ItemType Directory -Path "$evidence\MT5-Logs" -Force | Out-Null
+          New-Item `
+            -ItemType Directory `
+            -Path $evidence `
+            -Force |
+            Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Path "$evidence\Tester-Logs" `
+            -Force |
+            Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Path "$evidence\MT5-Logs" `
+            -Force |
+            Out-Null
 
       - name: Locate source
         shell: powershell
@@ -62,7 +80,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $installer = "$env:RUNNER_TEMP\mt5setup.exe"
+          $installer = Join-Path `
+            $env:RUNNER_TEMP `
+            'mt5setup.exe'
+
+          Write-Host "Downloading MT5 installer..."
+          Write-Host "Destination: $installer"
 
           Invoke-WebRequest `
             -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
@@ -70,10 +93,16 @@ jobs:
             -UseBasicParsing
 
           if (-not (Test-Path -LiteralPath $installer)) {
-            throw 'MT5 installer download failed.'
+            throw "MT5 installer download failed: $installer"
           }
 
-          Write-Host "MT5 installer: $installer"
+          $size = (Get-Item -LiteralPath $installer).Length
+
+          Write-Host "MT5 installer size: $size bytes"
+
+          if ($size -lt 100000) {
+            throw "MT5 installer appears invalid or incomplete. Size: $size bytes"
+          }
 
           "MT5_INSTALLER=$installer" |
             Out-File $env:GITHUB_ENV -Encoding utf8
@@ -83,38 +112,454 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          Remove-Item $env:MT5_DIR -Recurse -Force -ErrorAction SilentlyContinue
+          Write-Host '========== INSTALLING MT5 =========='
+
+          $mt5Dir = 'C:\MT5'
+          $installer = $env:MT5_INSTALLER
+
+          if (-not (Test-Path -LiteralPath $installer)) {
+            throw "Installer does not exist: $installer"
+          }
+
+          Remove-Item `
+            -Path $mt5Dir `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
 
           New-Item `
             -ItemType Directory `
-            -Path $env:MT5_DIR `
+            -Path $mt5Dir `
             -Force |
             Out-Null
 
+          Write-Host "Installation directory: $mt5Dir"
+
+          $arguments = @(
+            '/auto'
+            "/path:`"$mt5Dir`""
+          )
+
+          Write-Host "Installer arguments:"
+          $arguments | ForEach-Object {
+            Write-Host "  $_"
+          }
+
           $p = Start-Process `
-            -FilePath $env:MT5_INSTALLER `
-            -ArgumentList @(
-              '/auto'
-              "/path:$env:MT5_DIR"
-            ) `
+            -FilePath $installer `
+            -ArgumentList $arguments `
             -Wait `
             -PassThru
 
           Write-Host "MT5 installer exit code: $($p.ExitCode)"
 
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 10
+
+          Write-Host '========== SEARCHING FOR MT5 =========='
 
           $terminal = Get-ChildItem `
-            -Path $env:MT5_DIR `
+            -Path $mt5Dir `
             -Filter 'terminal64.exe' `
             -File `
             -Recurse `
             -ErrorAction SilentlyContinue |
             Select-Object -First 1
 
+          $editor = Get-ChildItem `
+            -Path $mt5Dir `
+            -Filter 'metaeditor64.exe' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
           if ($null -eq $terminal) {
-            throw "terminal64.exe was not found under $env:MT5_DIR"
+            Write-Host 'terminal64.exe was NOT found.'
+
+            Write-Host '========== C:\MT5 CONTENTS =========='
+
+            if (Test-Path -LiteralPath $mt5Dir) {
+              Get-ChildItem `
+                -Path $mt5Dir `
+                -Recurse `
+                -Force `
+                -ErrorAction SilentlyContinue |
+                Select-Object FullName,Length,LastWriteTime |
+                Select-Object -First 200 |
+                Format-Table -AutoSize
+            }
+
+            throw "MT5 installation failed. Installer exit code: $($p.ExitCode). terminal64.exe was not found."
           }
 
-          $editor = Get-ChildItem `
-            -Path $
+          if ($null -eq $editor) {
+            throw "MT5 installation incomplete. terminal64.exe exists but metaeditor64.exe was not found. Installer exit code: $($p.ExitCode)"
+          }
+
+          Write-Host "TERMINAL: $($terminal.FullName)"
+          Write-Host "METAEDITOR: $($editor.FullName)"
+
+          if (-not (Test-Path -LiteralPath $terminal.FullName)) {
+            throw "Terminal executable failed verification."
+          }
+
+          if (-not (Test-Path -LiteralPath $editor.FullName)) {
+            throw "MetaEditor executable failed verification."
+          }
+
+          "MT5_TERMINAL=$($terminal.FullName)" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+          "METAEDITOR=$($editor.FullName)" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+          Write-Host '========== MT5 INSTALLATION VERIFIED =========='
+
+      - name: Prepare EA
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $expertDir = 'C:\MT5\MQL5\Experts\KingsBot'
+
+          New-Item `
+            -ItemType Directory `
+            -Path $expertDir `
+            -Force |
+            Out-Null
+
+          $sourceRoot = Split-Path `
+            -Path $env:BOT_SOURCE `
+            -Parent
+
+          Copy-Item `
+            -Path "$sourceRoot\*" `
+            -Destination $expertDir `
+            -Recurse `
+            -Force
+
+          $expertSource = Join-Path `
+            $expertDir `
+            $env:BOT_SOURCE_NAME
+
+          if (-not (Test-Path -LiteralPath $expertSource)) {
+            throw "EA source missing: $expertSource"
+          }
+
+          Write-Host "EXPERT SOURCE: $expertSource"
+
+          "EXPERT_SOURCE=$expertSource" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+      - name: Compile EA
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          $log = Join-Path `
+            $env:RUNNER_TEMP `
+            'KingsBot-compile.log'
+
+          Write-Host '========== COMPILING KING''S BOT =========='
+
+          $p = Start-Process `
+            -FilePath $env:METAEDITOR `
+            -ArgumentList @(
+              '/portable'
+              "/compile:$env:EXPERT_SOURCE"
+              "/log:$log"
+            ) `
+            -WorkingDirectory 'C:\MT5' `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+
+          Write-Host "MetaEditor exit code: $($p.ExitCode)"
+
+          if (Test-Path -LiteralPath $log) {
+            Copy-Item `
+              -Path $log `
+              -Destination "$env:GITHUB_WORKSPACE\phase7-evidence\compile.log" `
+              -Force
+
+            Get-Content -LiteralPath $log
+          }
+
+          Start-Sleep -Seconds 5
+
+          $ex5 = Get-ChildItem `
+            -Path 'C:\MT5' `
+            -Filter $env:EX5_NAME `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if ($null -eq $ex5) {
+            throw "EX5 was not produced: $env:EX5_NAME"
+          }
+
+          Write-Host "EX5: $($ex5.FullName)"
+          Write-Host "EX5 SIZE: $($ex5.Length) bytes"
+
+          if ($ex5.Length -lt 1000) {
+            throw "EX5 file is unexpectedly small: $($ex5.Length) bytes"
+          }
+
+      - name: Create tester configuration
+        shell: powershell
+        env:
+          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:MT5_LOGIN)) {
+            throw 'MT5_LOGIN secret is empty.'
+          }
+
+          $config = 'C:\MT5\KingsBot_Phase7_Tester.ini'
+
+          $lines = @(
+            '[Tester]'
+            'Expert=KingsBot\KingsBot_Phase6_Integration.ex5'
+            'Symbol=EURUSD'
+            'Period=M15'
+            'Model=0'
+            'Optimization=0'
+            'FromDate=2025.01.01'
+            'ToDate=2026.08.01'
+            'ForwardMode=0'
+            "Login=$env:MT5_LOGIN"
+            'Deposit=10000'
+            'Currency=USD'
+            'Leverage=1:100'
+            'UseLocal=1'
+            'UseRemote=0'
+            'UseCloud=0'
+            'Visual=0'
+            'ReplaceReport=1'
+            'Report=KingsBot_Phase7_Tester'
+            'ShutdownTerminal=1'
+          )
+
+          Set-Content `
+            -Path $config `
+            -Value $lines `
+            -Encoding Unicode
+
+          if (-not (Test-Path -LiteralPath $config)) {
+            throw "Tester configuration was not created: $config"
+          }
+
+          Write-Host '========== TESTER CONFIG =========='
+          Get-Content -LiteralPath $config
+          Write-Host '==================================='
+
+          "TESTER_CONFIG=$config" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+          Copy-Item `
+            -Path $config `
+            -Destination "$env:GITHUB_WORKSPACE\phase7-evidence\Tester-Config.ini" `
+            -Force
+
+      - name: Start Strategy Tester
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Write-Host '========== STARTING MT5 TESTER =========='
+
+          # Find the terminal again at the exact point of launch.
+          $mt5Terminal = Get-ChildItem `
+            -Path 'C:\MT5' `
+            -Filter 'terminal64.exe' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($null -eq $mt5Terminal) {
+            throw 'terminal64.exe cannot be found immediately before tester launch.'
+          }
+
+          $terminalPath = $mt5Terminal.FullName
+
+          Write-Host "MT5 TERMINAL: $terminalPath"
+
+          if ([string]::IsNullOrWhiteSpace($terminalPath)) {
+            throw 'MT5 terminal path is empty.'
+          }
+
+          if (-not (Test-Path -LiteralPath $terminalPath)) {
+            throw "MT5 terminal does not exist: $terminalPath"
+          }
+
+          if (-not (Test-Path -LiteralPath $env:TESTER_CONFIG)) {
+            throw "Tester configuration does not exist: $env:TESTER_CONFIG"
+          }
+
+          Get-Process `
+            -Name terminal64,metatester64,metatester `
+            -ErrorAction SilentlyContinue |
+            Stop-Process `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+          Start-Sleep -Seconds 3
+
+          Get-ChildItem `
+            -Path 'C:\MT5' `
+            -Filter 'KingsBot_Phase7_Tester*.htm' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Remove-Item `
+              -Force `
+              -ErrorAction SilentlyContinue
+
+          Write-Host '========== LAUNCHING MT5 =========='
+
+          $arguments = @(
+            '/portable'
+            "/config:$env:TESTER_CONFIG"
+          )
+
+          $p = Start-Process `
+            -FilePath $terminalPath `
+            -ArgumentList $arguments `
+            -WorkingDirectory 'C:\MT5' `
+            -PassThru
+
+          if ($null -eq $p) {
+            throw 'MT5 did not return a process object.'
+          }
+
+          Write-Host "MT5 PID: $($p.Id)"
+
+          Start-Sleep -Seconds 15
+
+          Write-Host '========== MT5 PROCESS CHECK =========='
+
+          Get-Process `
+            -Name terminal64,metatester64,metatester `
+            -ErrorAction SilentlyContinue |
+            Select-Object Id,ProcessName,Path,StartTime |
+            Format-List
+
+          $elapsed = 0
+          $found = $false
+
+          while ($elapsed -lt 1200) {
+
+            Start-Sleep -Seconds 10
+            $elapsed += 10
+
+            $report = Get-ChildItem `
+              -Path 'C:\MT5' `
+              -Filter 'KingsBot_Phase7_Tester*.htm' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 1
+
+            if ($null -ne $report -and $report.Length -gt 500) {
+
+              Write-Host "REPORT FOUND: $($report.FullName)"
+              Write-Host "REPORT SIZE: $($report.Length) bytes"
+
+              Copy-Item `
+                -Path $report.FullName `
+                -Destination "$env:GITHUB_WORKSPACE\phase7-evidence\KingsBot_Phase7_Tester.htm" `
+                -Force
+
+              $found = $true
+              break
+            }
+
+            if ($elapsed % 60 -eq 0) {
+
+              Write-Host "Tester running: $elapsed seconds"
+
+              $agents = Get-Process `
+                -Name metatester64,metatester `
+                -ErrorAction SilentlyContinue
+
+              if ($null -eq $agents) {
+                Write-Host 'WARNING: No MetaTester agent currently visible.'
+              }
+              else {
+                Write-Host 'MetaTester agent detected.'
+              }
+            }
+          }
+
+          if (-not $found) {
+
+            Write-Host '========== FINAL MT5 PROCESSES =========='
+
+            Get-Process `
+              -Name terminal64,metatester64,metatester `
+              -ErrorAction SilentlyContinue |
+              Select-Object Id,ProcessName,Path,StartTime |
+              Format-List
+
+            Write-Host '========== REPORT FILES =========='
+
+            Get-ChildItem `
+              -Path 'C:\MT5' `
+              -Filter '*.htm' `
+              -File `
+              -Recurse `
+              -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending |
+              Select-Object -First 50 |
+              ForEach-Object {
+                Write-Host "$($_.FullName) | $($_.Length) bytes"
+              }
+
+            Write-Host '========== TESTER DIRECTORY =========='
+
+            if (Test-Path -LiteralPath 'C:\MT5\Tester') {
+              Get-ChildItem `
+                -Path 'C:\MT5\Tester' `
+                -File `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
+                Select-Object FullName,Length,LastWriteTime |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 100 |
+                Format-Table -AutoSize
+            }
+
+            throw 'Strategy Tester report was not produced.'
+          }
+
+          Write-Host '========== PHASE 7 TESTER PASSED =========='
+
+      - name: Collect MT5 logs
+        if: always()
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          $destination = "$env:GITHUB_WORKSPACE\phase7-evidence\MT5-Logs"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $destination `
+            -Force |
+            Out-Null
+
+          if (Test-Path -LiteralPath 'C:\MT5\logs') {
+            Copy-Item `
+              'C:\MT5\logs\*' `
+              $destination `
+              -Recurse `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+          if (Test-Path -LiteralPath 'C
