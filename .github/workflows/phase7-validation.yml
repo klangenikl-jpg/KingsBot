@@ -18,78 +18,26 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout KingsBot
-        uses: actions/checkout@v4
 
-      - name: Install MetaTrader 5
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Initialize Phase 7 evidence
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $mt5 = $env:MT5_DIR
-          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+          $evidence = Join-Path $env:GITHUB_WORKSPACE 'phase7-evidence'
 
-          New-Item -ItemType Directory -Force -Path $mt5 | Out-Null
+          Remove-Item -LiteralPath $evidence -Recurse -Force -ErrorAction SilentlyContinue
 
-          Write-Host '========== DOWNLOADING MT5 =========='
+          New-Item -ItemType Directory -Path $evidence -Force | Out-Null
+          New-Item -ItemType Directory -Path "$evidence\MT5-Logs" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$evidence\Tester-Logs" -Force | Out-Null
 
-          Invoke-WebRequest `
-            -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
-            -OutFile $installer `
-            -UseBasicParsing
+          Write-Host "Evidence directory: $evidence"
 
-          if (-not (Test-Path -LiteralPath $installer)) {
-            throw 'MT5 installer download failed.'
-          }
-
-          Write-Host '========== INSTALLING MT5 =========='
-
-          $p = Start-Process `
-            -FilePath $installer `
-            -ArgumentList @('/auto', "/path:$mt5") `
-            -Wait `
-            -PassThru
-
-          Write-Host "Installer exit code: $($p.ExitCode)"
-
-          Start-Sleep -Seconds 10
-
-          $terminal = Get-ChildItem `
-            -Path $mt5 `
-            -Filter 'terminal64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if ($null -eq $terminal) {
-            throw 'MT5 installation completed but terminal64.exe was not found.'
-          }
-
-          Write-Host "MT5 TERMINAL: $($terminal.FullName)"
-
-      - name: Locate MetaEditor
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $editor = Get-ChildItem `
-            -Path $env:MT5_DIR `
-            -Filter 'metaeditor64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if ($null -eq $editor) {
-            throw 'metaeditor64.exe not found under C:\MT5.'
-          }
-
-          "MT5_EDITOR=$($editor.FullName)" >> $env:GITHUB_ENV
-
-          Write-Host "MT5 EDITOR: $($editor.FullName)"
-
-      - name: Locate King''s Bot source
+      - name: Locate King's Bot source
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -106,113 +54,129 @@ jobs:
             throw "Source file not found: $env:BOT_SOURCE_NAME"
           }
 
-          "BOT_SOURCE=$($source.FullName)" >> $env:GITHUB_ENV
-
           Write-Host "SOURCE: $($source.FullName)"
 
-      - name: Prepare King''s Bot source
+          "BOT_SOURCE=$($source.FullName)" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+      - name: Download MetaTrader 5
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $expertDir = Join-Path $env:MT5_DIR 'MQL5\Experts\KingsBot'
+          $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
+
+          Invoke-WebRequest `
+            -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
+            -OutFile $installer `
+            -UseBasicParsing `
+            -TimeoutSec 180
+
+          if (-not (Test-Path -LiteralPath $installer)) {
+            throw 'MT5 installer was not downloaded.'
+          }
+
+          $size = (Get-Item -LiteralPath $installer).Length
+
+          Write-Host "Installer size: $size bytes"
+
+          if ($size -lt 100000) {
+            throw "MT5 installer appears invalid or incomplete."
+          }
+
+          "MT5_INSTALLER=$installer" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+      - name: Install and verify MetaTrader 5
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          Remove-Item `
+            -LiteralPath $env:MT5_DIR `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
 
           New-Item `
             -ItemType Directory `
-            -Force `
-            -Path $expertDir |
+            -Path $env:MT5_DIR `
+            -Force |
             Out-Null
 
-          Copy-Item `
-            -LiteralPath $env:BOT_SOURCE `
-            -Destination (Join-Path $expertDir $env:BOT_SOURCE_NAME) `
-            -Force
+          $process = Start-Process `
+            -FilePath $env:MT5_INSTALLER `
+            -ArgumentList @(
+              '/auto'
+              "/path:$env:MT5_DIR"
+            ) `
+            -Wait `
+            -PassThru
 
-          $expertSource = Join-Path $expertDir $env:BOT_SOURCE_NAME
+          Write-Host "MT5 installer exit code: $($process.ExitCode)"
 
-          if (-not (Test-Path -LiteralPath $expertSource)) {
-            throw "Failed to copy source to $expertSource"
-          }
+          Start-Sleep -Seconds 10
 
-          "EXPERT_SOURCE=$expertSource" >> $env:GITHUB_ENV
-
-          Write-Host "EXPERT SOURCE: $expertSource"
-
-      - name: Compile King''s Bot
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $compileLog = Join-Path $env:GITHUB_WORKSPACE 'phase7-compile.log'
-
-          Write-Host '========== COMPILING KING''S BOT =========='
-          Write-Host "EDITOR: $env:MT5_EDITOR"
-          Write-Host "SOURCE: $env:EXPERT_SOURCE"
-
-          & $env:MT5_EDITOR `
-            '/portable' `
-            "/compile:$env:EXPERT_SOURCE" `
-            "/log:$compileLog"
-
-          $exitCode = $LASTEXITCODE
-
-          Write-Host "MetaEditor exit code: $exitCode"
-
-          if (Test-Path -LiteralPath $compileLog) {
-            Get-Content -LiteralPath $compileLog
-          }
-
-          if ($exitCode -ne 0) {
-            throw "MetaEditor compilation failed with exit code $exitCode"
-          }
-
-      - name: Verify compiled EX5
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          $ex5 = Get-ChildItem `
+          $terminal = Get-ChildItem `
             -Path $env:MT5_DIR `
-            -Filter $env:EX5_NAME `
+            -Filter 'terminal64.exe' `
             -File `
             -Recurse `
             -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending |
             Select-Object -First 1
 
-          if ($null -eq $ex5) {
-            throw "Compiled EX5 not found: $env:EX5_NAME"
+          $editor = Get-ChildItem `
+            -Path $env:MT5_DIR `
+            -Filter 'metaeditor64.exe' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($null -eq $terminal) {
+            throw "terminal64.exe was not found. Installer exit code: $($process.ExitCode)"
           }
 
-          Write-Host "COMPILED EX5: $($ex5.FullName)"
-          Write-Host "SIZE: $($ex5.Length) bytes"
+          if ($null -eq $editor) {
+            throw "metaeditor64.exe was not found. Installer exit code: $($process.ExitCode)"
+          }
 
-      - name: Run Phase 7 Tester
+          Write-Host "TERMINAL: $($terminal.FullName)"
+          Write-Host "METAEDITOR: $($editor.FullName)"
+
+          "MT5_TERMINAL=$($terminal.FullName)" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+          "METAEDITOR=$($editor.FullName)" |
+            Out-File $env:GITHUB_ENV -Encoding utf8
+
+      - name: Prepare King's Bot
         shell: powershell
-        env:
-          MT5_LOGIN: ${{ secrets.MT5_LOGIN }}
-          MT5_SERVER: ${{ secrets.MT5_SERVER }}
-          MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $runner = Join-Path `
-            $env:GITHUB_WORKSPACE `
-            'scripts\phase7-run.ps1'
+          $expertDir = Join-Path `
+            $env:MT5_DIR `
+            'MQL5\Experts\KingsBot'
 
-          if (-not (Test-Path -LiteralPath $runner)) {
-            throw "Phase 7 runner not found: $runner"
-          }
+          New-Item `
+            -ItemType Directory `
+            -Path $expertDir `
+            -Force |
+            Out-Null
 
-          & $runner
+          $sourceRoot = Split-Path `
+            -Path $env:BOT_SOURCE `
+            -Parent
 
-      - name: Upload Phase 7 evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: KingsBot-Phase7-Evidence
-          path: |
-            phase7-evidence/**
-            phase7-compile.log
-          if-no-files-found: warn
-          retention-days: 14
+          Copy-Item `
+            -Path (Join-Path $sourceRoot '*') `
+            -Destination $expertDir `
+            -Recurse `
+            -Force
+
+          $expertSource = Join-Path `
+            $expertDir `
+            $env:BOT_SOURCE_NAME
+
+          if (-not (Test-Path -LiteralPath
