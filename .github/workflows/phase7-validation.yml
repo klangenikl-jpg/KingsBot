@@ -21,99 +21,20 @@ jobs:
       MT5_PASSWORD: ${{ secrets.MT5_PASSWORD }}
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Prepare evidence
+      - name: Run Phase 7 validation
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          & "$env:GITHUB_WORKSPACE\scripts\phase7-run.ps1"
 
-          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\phase7-evidence" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\phase7-evidence\MT5-Logs" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\phase7-evidence\Tester-Logs" | Out-Null
-
-      - name: Locate or install MT5
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-
-          Write-Host '========== LOCATING MT5 =========='
-
-          $terminal = Get-ChildItem `
-            -Path "$env:MT5_DIR" `
-            -Filter 'terminal64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if ($null -eq $terminal) {
-
-            Write-Host 'MT5 not found under C:\MT5.'
-            Write-Host '========== INSTALLING MT5 =========='
-
-            $installer = "$env:RUNNER_TEMP\mt5setup.exe"
-
-            Invoke-WebRequest `
-              -Uri 'https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe' `
-              -OutFile $installer `
-              -UseBasicParsing
-
-            if (-not (Test-Path -LiteralPath $installer)) {
-              throw 'MT5 installer download failed.'
-            }
-
-            New-Item `
-              -ItemType Directory `
-              -Force `
-              -Path "$env:MT5_DIR" | Out-Null
-
-            $installerProcess = Start-Process `
-              -FilePath $installer `
-              -ArgumentList "/auto","/path:$env:MT5_DIR" `
-              -Wait `
-              -PassThru
-
-            Write-Host "MT5 installer exit code: $($installerProcess.ExitCode)"
-
-            Start-Sleep -Seconds 10
-
-            $terminal = Get-ChildItem `
-              -Path "$env:MT5_DIR" `
-              -Filter 'terminal64.exe' `
-              -File `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-          }
-
-          if ($null -eq $terminal) {
-            Write-Host 'Searching entire runner for terminal64.exe.'
-
-            $terminal = Get-ChildItem `
-              -Path 'C:\' `
-              -Filter 'terminal64.exe' `
-              -File `
-              -Recurse `
-              -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-          }
-
-          if ($null -eq $terminal) {
-            throw 'terminal64.exe could not be found after MT5 installation.'
-          }
-
-          $terminalDir = Split-Path -Path $terminal.FullName -Parent
-
-          $editor = Get-ChildItem `
-            -Path $terminalDir `
-            -Filter 'metaeditor64.exe' `
-            -File `
-            -Recurse `
-            -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-
-          if ($null -eq $editor) {
-            $
+      - name: Upload Phase 7 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kingsbot-phase7-evidence
+          path: phase7-evidence
+          if-no-files-found: warn
+          retention-days: 14
