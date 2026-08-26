@@ -26,7 +26,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $mt5 = 'C:\MT5'
+          $mt5 = $env:MT5_DIR
           $installer = Join-Path $env:RUNNER_TEMP 'mt5setup.exe'
 
           New-Item -ItemType Directory -Force -Path $mt5 | Out-Null
@@ -68,18 +68,124 @@ jobs:
 
           Write-Host "MT5 TERMINAL: $($terminal.FullName)"
 
-      - name: Verify Phase 7 runner
+      - name: Locate MetaEditor
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $runner = Join-Path $env:GITHUB_WORKSPACE 'scripts\phase7-run.ps1'
+          $editor = Get-ChildItem `
+            -Path $env:MT5_DIR `
+            -Filter 'metaeditor64.exe' `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
-          if (-not (Test-Path -LiteralPath $runner)) {
-            throw "Phase 7 runner not found: $runner"
+          if ($null -eq $editor) {
+            throw 'metaeditor64.exe not found under C:\MT5.'
           }
 
-          Write-Host "PHASE 7 RUNNER: $runner"
+          "MT5_EDITOR=$($editor.FullName)" >> $env:GITHUB_ENV
+
+          Write-Host "MT5 EDITOR: $($editor.FullName)"
+
+      - name: Locate King''s Bot source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $source = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Filter $env:BOT_SOURCE_NAME `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($null -eq $source) {
+            throw "Source file not found: $env:BOT_SOURCE_NAME"
+          }
+
+          "BOT_SOURCE=$($source.FullName)" >> $env:GITHUB_ENV
+
+          Write-Host "SOURCE: $($source.FullName)"
+
+      - name: Prepare King''s Bot source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $expertDir = Join-Path $env:MT5_DIR 'MQL5\Experts\KingsBot'
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $expertDir |
+            Out-Null
+
+          Copy-Item `
+            -LiteralPath $env:BOT_SOURCE `
+            -Destination (Join-Path $expertDir $env:BOT_SOURCE_NAME) `
+            -Force
+
+          $expertSource = Join-Path $expertDir $env:BOT_SOURCE_NAME
+
+          if (-not (Test-Path -LiteralPath $expertSource)) {
+            throw "Failed to copy source to $expertSource"
+          }
+
+          "EXPERT_SOURCE=$expertSource" >> $env:GITHUB_ENV
+
+          Write-Host "EXPERT SOURCE: $expertSource"
+
+      - name: Compile King''s Bot
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $compileLog = Join-Path $env:GITHUB_WORKSPACE 'phase7-compile.log'
+
+          Write-Host '========== COMPILING KING''S BOT =========='
+          Write-Host "EDITOR: $env:MT5_EDITOR"
+          Write-Host "SOURCE: $env:EXPERT_SOURCE"
+
+          & $env:MT5_EDITOR `
+            '/portable' `
+            "/compile:$env:EXPERT_SOURCE" `
+            "/log:$compileLog"
+
+          $exitCode = $LASTEXITCODE
+
+          Write-Host "MetaEditor exit code: $exitCode"
+
+          if (Test-Path -LiteralPath $compileLog) {
+            Get-Content -LiteralPath $compileLog
+          }
+
+          if ($exitCode -ne 0) {
+            throw "MetaEditor compilation failed with exit code $exitCode"
+          }
+
+      - name: Verify compiled EX5
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $ex5 = Get-ChildItem `
+            -Path $env:MT5_DIR `
+            -Filter $env:EX5_NAME `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if ($null -eq $ex5) {
+            throw "Compiled EX5 not found: $env:EX5_NAME"
+          }
+
+          Write-Host "COMPILED EX5: $($ex5.FullName)"
+          Write-Host "SIZE: $($ex5.Length) bytes"
 
       - name: Run Phase 7 Tester
         shell: powershell
@@ -90,7 +196,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $runner = Join-Path $env:GITHUB_WORKSPACE 'scripts\phase7-run.ps1'
+          $runner = Join-Path `
+            $env:GITHUB_WORKSPACE `
+            'scripts\phase7-run.ps1'
+
+          if (-not (Test-Path -LiteralPath $runner)) {
+            throw "Phase 7 runner not found: $runner"
+          }
 
           & $runner
 
@@ -101,5 +213,6 @@ jobs:
           name: KingsBot-Phase7-Evidence
           path: |
             phase7-evidence/**
+            phase7-compile.log
           if-no-files-found: warn
           retention-days: 14
